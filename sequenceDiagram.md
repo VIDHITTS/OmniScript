@@ -28,7 +28,7 @@ sequenceDiagram
     Worker->>DB: Query Chunks (Embedding Similarity)
     DB-->>Worker: Return Top 3-5 Chunks
     Worker->>LLM: Send Prompt (Question + Context)
-    LLM-->>Worker: Generate Check Answer
+    LLM-->>Worker: Generate Answer
     Worker->>Frontend: Return Answer + Citations
     Frontend->>User: Display Answer
 ```
