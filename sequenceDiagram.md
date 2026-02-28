@@ -1,7 +1,8 @@
-# Sequence Diagrams — OmniScript (Personal Knowledge OS)
+# Sequence Diagrams — OmniScript
 
 ## Overview
-These diagrams illustrate the **end-to-end flows** of OmniScript, covering authentication, document ingestion, agentic RAG chat, knowledge graph construction, and artifact generation.
+
+End-to-end flows covering authentication, document ingestion, agentic RAG chat, knowledge graph construction, and artifact generation.
 
 ---
 

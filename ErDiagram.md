@@ -1,18 +1,8 @@
-# ER Diagram — OmniScript (Personal Knowledge OS)
+# ER Diagram — OmniScript
 
 ## Overview
 
-This Entity-Relationship diagram defines the **complete database schema** for OmniScript — a full-stack Agentic RAG platform with knowledge graph, collaboration, multi-modal ingestion, and observability.
-
-The schema supports the **full AI Knowledge Lifecycle**:
-1. **Identity & Access** — Users, workspaces, roles, API keys
-2. **Ingestion** — Multi-modal document upload with async processing
-3. **Processing** — Chunking, embedding, entity extraction
-4. **Knowledge Graph** — Auto-discovered entities and relationships
-5. **Retrieval** — Hybrid search (vector + full-text)
-6. **Generation** — Agentic RAG with tool use and multi-step reasoning
-7. **Collaboration** — Shared workspaces, annotations, activity feed
-8. **Observability** — Audit logs, usage metrics, feedback loops
+Complete database schema for OmniScript — 17 tables covering identity, ingestion, knowledge graph, agentic RAG, collaboration, and observability.
 
 ---
 
@@ -286,59 +276,52 @@ erDiagram
 
 ## Key Indexes
 
-| Table | Index | Purpose |
-|---|---|---|
-| `DOCUMENT_CHUNKS` | **HNSW** on `embedding` | Millisecond vector similarity search |
-| `DOCUMENT_CHUNKS` | **GIN** on `search_vector` | BM25-style full-text search |
-| `DOCUMENTS` | **GIN** on `search_vector` | Document-level full-text search |
-| `DOCUMENTS` | `(workspace_id, status)` | Find processing/stuck documents |
-| `MESSAGES` | `(session_id, created_at)` | Load chat history chronologically |
-| `CHAT_SESSIONS` | `(user_id, last_active_at DESC)` | "Recent Chats" sidebar |
-| `DOCUMENT_CHUNKS` | `(document_id)` | Cascade delete chunks when doc deleted |
-| `KG_ENTITIES` | `(workspace_id, entity_type)` | Filter graph by entity type |
-| `KG_EDGES` | `(source_entity_id)`, `(target_entity_id)` | Graph traversal |
-| `KG_ENTITY_CHUNKS` | `(entity_id)`, `(chunk_id)` | Entity-Chunk lookups |
-| `ACTIVITY_LOG` | `(workspace_id, created_at DESC)` | Activity feed pagination |
-| `AUDIT_LOG` | `(user_id, created_at DESC)` | Security audit trail |
-| `USAGE_METRICS` | `(user_id, metric_date)` | Daily usage aggregation |
-| `API_KEYS` | `(key_hash)` | Fast API key lookup on every request |
-| `MESSAGE_FEEDBACK` | `(message_id)` | Aggregate feedback per message |
+| Table              | Index                                      | Purpose                                |
+| ------------------ | ------------------------------------------ | -------------------------------------- |
+| `DOCUMENT_CHUNKS`  | **HNSW** on `embedding`                    | Millisecond vector similarity search   |
+| `DOCUMENT_CHUNKS`  | **GIN** on `search_vector`                 | BM25-style full-text search            |
+| `DOCUMENTS`        | **GIN** on `search_vector`                 | Document-level full-text search        |
+| `DOCUMENTS`        | `(workspace_id, status)`                   | Find processing/stuck documents        |
+| `MESSAGES`         | `(session_id, created_at)`                 | Load chat history chronologically      |
+| `CHAT_SESSIONS`    | `(user_id, last_active_at DESC)`           | "Recent Chats" sidebar                 |
+| `DOCUMENT_CHUNKS`  | `(document_id)`                            | Cascade delete chunks when doc deleted |
+| `KG_ENTITIES`      | `(workspace_id, entity_type)`              | Filter graph by entity type            |
+| `KG_EDGES`         | `(source_entity_id)`, `(target_entity_id)` | Graph traversal                        |
+| `KG_ENTITY_CHUNKS` | `(entity_id)`, `(chunk_id)`                | Entity-Chunk lookups                   |
+| `ACTIVITY_LOG`     | `(workspace_id, created_at DESC)`          | Activity feed pagination               |
+| `AUDIT_LOG`        | `(user_id, created_at DESC)`               | Security audit trail                   |
+| `USAGE_METRICS`    | `(user_id, metric_date)`                   | Daily usage aggregation                |
+| `API_KEYS`         | `(key_hash)`                               | Fast API key lookup on every request   |
+| `MESSAGE_FEEDBACK` | `(message_id)`                             | Aggregate feedback per message         |
 
 ---
 
 ## Architecture Decisions
 
 ### 1. Hybrid Search (Vector + Full-Text in Postgres)
-- **What:** Both `DOCUMENT_CHUNKS` and `DOCUMENTS` have `tsvector` columns alongside `vector` embeddings.
-- **Why:** Vector search finds semantic matches ("puppy" finds "dog"), but misses exact terms ("BRCA1"). Full-text search catches exact matches. Reciprocal Rank Fusion (RRF) merges both.
-- **Benefit:** Google-grade retrieval quality in a single database — no external search engine needed.
+
+Both `DOCUMENT_CHUNKS` and `DOCUMENTS` have `tsvector` columns alongside `vector` embeddings. Vector search catches semantic matches, full-text search catches exact terms. Reciprocal Rank Fusion (RRF) merges both — no external search engine needed.
 
 ### 2. Knowledge Graph in Postgres (Not Neo4j)
-- **What:** `KG_ENTITIES`, `KG_EDGES`, and `KG_ENTITY_CHUNKS` tables with standard foreign keys.
-- **Why:** The graph is workspace-scoped and moderate-sized (thousands of nodes, not billions). Postgres handles this with recursive CTEs and proper indexing. Adding Neo4j would mean another database to manage.
-- **Benefit:** Single database simplicity. Can always migrate to Neo4j later if graph queries become the bottleneck.
+
+`KG_ENTITIES`, `KG_EDGES`, and `KG_ENTITY_CHUNKS` use standard foreign keys. The graph is workspace-scoped and moderate-sized (thousands of nodes, not billions), so Postgres handles it fine with recursive CTEs and proper indexing. Can migrate to Neo4j later if needed.
 
 ### 3. Agentic RAG via Tool Calls (MESSAGES table)
-- **What:** Messages have a `tool_calls` JSONB column that stores the agent's reasoning steps.
-- **Why:** The agent may perform multiple searches, rephrase queries, or call different tools. Storing this creates a debuggable, replayable audit trail of how answers were generated.
-- **Benefit:** Full transparency into AI reasoning. Enables quality analysis ("which tool paths produce the best answers?").
+
+Messages store a `tool_calls` JSONB column with the agent's reasoning steps — searches performed, queries rephrased, tools selected. This creates a debuggable, replayable audit trail of how every answer was generated.
 
 ### 4. Conversation Branching (Self-Referential CHAT_SESSIONS)
-- **What:** `CHAT_SESSIONS` has a `parent_session_id` FK pointing to itself.
-- **Why:** Users may want to explore "what if" tangents without losing their original conversation.
-- **Benefit:** Tree-structured conversations, like Git branches for thought.
+
+`CHAT_SESSIONS` has a `parent_session_id` FK pointing to itself, enabling tree-structured conversations — users can explore tangents without losing the original thread.
 
 ### 5. Feedback Loop (MESSAGE_FEEDBACK)
-- **What:** Users rate AI answers as GOOD / BAD / PARTIAL.
-- **Why:** Creates a labeled dataset for evaluating and improving RAG quality over time.
-- **Benefit:** Enables RLHF-style fine-tuning signals and automated quality dashboards.
+
+Users rate AI answers as GOOD / BAD / PARTIAL. Creates a labeled dataset for evaluating and improving RAG quality over time.
 
 ### 6. Webhook and API Key System
-- **What:** `WEBHOOKS` for push notifications, `API_KEYS` for programmatic access.
-- **Why:** Makes OmniScript a **platform**, not just an app. External tools can integrate.
-- **Benefit:** Slack bots, CI/CD pipelines, Chrome extensions can all interact with OmniScript.
+
+`WEBHOOKS` for push notifications, `API_KEYS` for programmatic access. Makes OmniScript a platform — external tools (Slack bots, Chrome extensions, CI/CD) can integrate via API.
 
 ### 7. Multi-Granularity Observability
-- **What:** Three separate tables: `ACTIVITY_LOG` (workspace-level), `AUDIT_LOG` (security), `USAGE_METRICS` (billing).
-- **Why:** Each serves a different audience: workspace members, security admins, and billing systems.
-- **Benefit:** Clean separation of concerns. Activity feed is not the same as security audit is not the same as cost tracking.
+
+Three separate tables: `ACTIVITY_LOG` (workspace-level), `AUDIT_LOG` (security), `USAGE_METRICS` (billing). Each serves a different audience and concern.

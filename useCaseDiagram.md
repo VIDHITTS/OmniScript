@@ -1,7 +1,8 @@
-# Use Case Diagram — OmniScript (Personal Knowledge OS)
+# Use Case Diagram — OmniScript
 
 ## Overview
-This diagram illustrates all interactions between the **User**, **System (Background Workers)**, **AI Agent**, and the **LLM** across the full feature set of OmniScript.
+
+All interactions between the User, System Workers, AI Agent, LLM, and External integrations.
 
 ```mermaid
 flowchart TD
@@ -193,10 +194,10 @@ flowchart TD
 
 ## Actor Descriptions
 
-| Actor | Description |
-|---|---|
-| **👤 User** | End user interacting via the web app |
-| **⚙️ System / Workers** | Background workers handling async processing (ingestion, embedding, KG extraction) |
-| **🤖 RAG Agent** | The agentic AI orchestrator that plans, executes tools, evaluates, and retries |
-| **🧠 LLM (GPT-4o)** | The language model used for generation, extraction, and evaluation |
-| **🔌 External** | External systems interacting via API, webhooks, or integrations (Slack, Chrome, etc.) |
+| Actor                   | Description                                                                           |
+| ----------------------- | ------------------------------------------------------------------------------------- |
+| **👤 User**             | End user interacting via the web app                                                  |
+| **⚙️ System / Workers** | Background workers handling async processing (ingestion, embedding, KG extraction)    |
+| **🤖 RAG Agent**        | The agentic AI orchestrator that plans, executes tools, evaluates, and retries        |
+| **🧠 LLM (GPT-4o)**     | The language model used for generation, extraction, and evaluation                    |
+| **🔌 External**         | External systems interacting via API, webhooks, or integrations (Slack, Chrome, etc.) |

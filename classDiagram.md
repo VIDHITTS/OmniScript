@@ -1,7 +1,8 @@
-# Class Diagram — OmniScript (Personal Knowledge OS)
+# Class Diagram — OmniScript
 
 ## Overview
-This diagram represents the **complete domain model** of OmniScript, including the core entities, agentic RAG components, knowledge graph, collaboration, and observability layers.
+
+Domain model covering core entities, agentic RAG components, knowledge graph, collaboration, and observability.
 
 ```mermaid
 classDiagram
@@ -319,10 +320,10 @@ classDiagram
 
 ## Key Design Patterns
 
-| Pattern | Where Used | Why |
-|---|---|---|
-| **Strategy Pattern** | `AgentTool` interface + concrete tools | Agent dynamically selects which retrieval tool to use |
-| **Observer Pattern** | `Webhook` system | External systems get notified of events without polling |
-| **Composite Pattern** | `ChatSession` self-reference (branching) | Tree-structured conversations |
-| **Builder Pattern** | `Artifact.generate()` | Complex artifact generation with step-by-step construction |
-| **Repository Pattern** | All database access | Clean separation between domain logic and data access |
+| Pattern                | Where Used                               | Why                                                        |
+| ---------------------- | ---------------------------------------- | ---------------------------------------------------------- |
+| **Strategy Pattern**   | `AgentTool` interface + concrete tools   | Agent dynamically selects which retrieval tool to use      |
+| **Observer Pattern**   | `Webhook` system                         | External systems get notified of events without polling    |
+| **Composite Pattern**  | `ChatSession` self-reference (branching) | Tree-structured conversations                              |
+| **Builder Pattern**    | `Artifact.generate()`                    | Complex artifact generation with step-by-step construction |
+| **Repository Pattern** | All database access                      | Clean separation between domain logic and data access      |
