@@ -6,26 +6,26 @@ OmniScript lets you ingest PDFs, YouTube videos, web pages, audio, images, and c
 
 ---
 
-## ✨ Features
+##  Features
 
 | Category               | Features                                                               |
 | ---------------------- | ---------------------------------------------------------------------- |
-| **🔐 Auth**            | Email/password, Google/GitHub OAuth, MFA, API keys                     |
-| **📁 Workspaces**      | Isolated knowledge vaults with templates, RBAC, analytics              |
-| **📄 Ingestion**       | PDF, Markdown, YouTube, Web URL, Audio, Images, Code, CSV              |
-| **🤖 Agentic RAG**     | Multi-step reasoning, tool selection, query rewriting, self-evaluation |
-| **🔍 Hybrid Search**   | Vector (pgvector) + Full-Text (BM25) + Reciprocal Rank Fusion          |
-| **🕸️ Knowledge Graph** | Auto-extracted entities & relationships, visual explorer               |
-| **💬 Chat**            | Multi-turn, branching, bookmarks, follow-ups, streaming                |
-| **📊 Artifacts**       | Summaries, flashcards, mind maps, timelines, study guides, glossaries  |
-| **👥 Collaboration**   | Shared workspaces, live chat, annotations, activity feed               |
-| **🔌 Integrations**    | REST API, webhooks, Chrome extension, Slack bot                        |
-| **📈 Observability**   | Usage dashboard, cost tracking, RAG quality metrics, audit logs        |
-| **🔒 Security**        | AES-256 encryption, Row-Level Security, GDPR compliance                |
+| ** Auth**            | Email/password, Google/GitHub OAuth, MFA, API keys                     |
+| ** Workspaces**      | Isolated knowledge vaults with templates, RBAC, analytics              |
+| ** Ingestion**       | PDF, Markdown, YouTube, Web URL, Audio, Images, Code, CSV              |
+| ** Agentic RAG**     | Multi-step reasoning, tool selection, query rewriting, self-evaluation |
+| ** Hybrid Search**   | Vector (pgvector) + Full-Text (BM25) + Reciprocal Rank Fusion          |
+| ** Knowledge Graph** | Auto-extracted entities & relationships, visual explorer               |
+| ** Chat**            | Multi-turn, branching, bookmarks, follow-ups, streaming                |
+| ** Artifacts**       | Summaries, flashcards, mind maps, timelines, study guides, glossaries  |
+| ** Collaboration**   | Shared workspaces, live chat, annotations, activity feed               |
+| ** Integrations**    | REST API, webhooks, Chrome extension, Slack bot                        |
+| ** Observability**   | Usage dashboard, cost tracking, RAG quality metrics, audit logs        |
+| ** Security**        | AES-256 encryption, Row-Level Security, GDPR compliance                |
 
 ---
 
-## 🏗️ Tech Stack
+##  Tech Stack
 
 | Layer            | Technology                                     |
 | ---------------- | ---------------------------------------------- |
@@ -44,7 +44,7 @@ OmniScript lets you ingest PDFs, YouTube videos, web pages, audio, images, and c
 
 ---
 
-## 📐 Documentation
+##  Documentation
 
 | File                                       | Description                                                              |
 | ------------------------------------------ | ------------------------------------------------------------------------ |
@@ -56,7 +56,7 @@ OmniScript lets you ingest PDFs, YouTube videos, web pages, audio, images, and c
 
 ---
 
-## 🚀 Build Phases
+##  Build Phases
 
 - [x] **Phase 1** — Foundation (Auth, Workspaces, Upload, Basic RAG, Citations)
 - [ ] **Phase 2** — Intelligence (Agentic RAG, Hybrid Search, YouTube/Web ingestion)
@@ -67,6 +67,6 @@ OmniScript lets you ingest PDFs, YouTube videos, web pages, audio, images, and c
 
 ---
 
-## 📄 License
+##  License
 
 MIT

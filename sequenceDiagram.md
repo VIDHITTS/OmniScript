@@ -199,3 +199,4 @@ sequenceDiagram
     Backend-->>Frontend: { artifactId, flashcards, export_url }
     Frontend->>User: Display interactive flashcard viewer + download button
 ```
+ 

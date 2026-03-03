@@ -327,3 +327,4 @@ classDiagram
 | **Composite Pattern**  | `ChatSession` self-reference (branching) | Tree-structured conversations                              |
 | **Builder Pattern**    | `Artifact.generate()`                    | Complex artifact generation with step-by-step construction |
 | **Repository Pattern** | All database access                      | Clean separation between domain logic and data access      |
+ 
