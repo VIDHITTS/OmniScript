@@ -325,3 +325,4 @@ Users rate AI answers as GOOD / BAD / PARTIAL. Creates a labeled dataset for eva
 ### 7. Multi-Granularity Observability
 
 Three separate tables: `ACTIVITY_LOG` (workspace-level), `AUDIT_LOG` (security), `USAGE_METRICS` (billing). Each serves a different audience and concern.
+ 

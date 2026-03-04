@@ -7,14 +7,14 @@ All interactions between the User, System Workers, AI Agent, LLM, and External i
 ```mermaid
 flowchart TD
     %% ===== ACTORS =====
-    U(["👤 User"])
-    S(["⚙️ System / Workers"])
-    AG(["🤖 RAG Agent"])
-    LLM(["🧠 LLM (GPT-4o)"])
-    EXT(["🔌 External (API / Webhook)"])
+    U([" User"])
+    S([" System / Workers"])
+    AG([" RAG Agent"])
+    LLM([" LLM (GPT-4o)"])
+    EXT([" External (API / Webhook)"])
 
     %% ===== AUTHENTICATION =====
-    subgraph Auth ["🔐 Authentication"]
+    subgraph Auth [" Authentication"]
         UC_REG["Register (Email)"]
         UC_OAUTH["Sign in (Google / GitHub)"]
         UC_MFA["Enable MFA"]
@@ -22,7 +22,7 @@ flowchart TD
     end
 
     %% ===== WORKSPACE MANAGEMENT =====
-    subgraph WS ["📁 Workspace Management"]
+    subgraph WS [" Workspace Management"]
         UC_CW["Create Workspace"]
         UC_CW_TPL["Use Workspace Template"]
         UC_INVITE["Invite Members"]
@@ -32,7 +32,7 @@ flowchart TD
     end
 
     %% ===== DOCUMENT INGESTION =====
-    subgraph DOC ["📄 Document Ingestion"]
+    subgraph DOC [" Document Ingestion"]
         UC_UPLOAD["Upload Document"]
         UC_UPLOAD_YT["Paste YouTube URL"]
         UC_UPLOAD_WEB["Paste Web URL"]
@@ -45,7 +45,7 @@ flowchart TD
     end
 
     %% ===== AI CHAT (AGENTIC RAG) =====
-    subgraph CHAT ["💬 AI Chat (Agentic RAG)"]
+    subgraph CHAT [" AI Chat (Agentic RAG)"]
         UC_ASK["Ask Question"]
         UC_PLAN["Agent Plans Strategy"]
         UC_VSEARCH["Vector Search (Semantic)"]
@@ -63,7 +63,7 @@ flowchart TD
     end
 
     %% ===== KNOWLEDGE GRAPH =====
-    subgraph KG ["🕸️ Knowledge Graph"]
+    subgraph KG [" Knowledge Graph"]
         UC_EXTRACT["Extract Entities"]
         UC_MAP_REL["Map Relationships"]
         UC_EXPLORE["Explore Graph Visually"]
@@ -71,7 +71,7 @@ flowchart TD
     end
 
     %% ===== ARTIFACTS =====
-    subgraph ART ["📊 Artifacts"]
+    subgraph ART [" Artifacts"]
         UC_SUMMARY["Generate Summary"]
         UC_FLASH["Generate Flashcards"]
         UC_MINDMAP["Generate Mind Map"]
@@ -83,7 +83,7 @@ flowchart TD
     end
 
     %% ===== COLLABORATION =====
-    subgraph COLLAB ["👥 Collaboration"]
+    subgraph COLLAB [" Collaboration"]
         UC_ANNOTATE["Annotate Document / Answer"]
         UC_ACTIVITY["View Activity Feed"]
         UC_MENTION["@Mention Team Member"]
@@ -91,7 +91,7 @@ flowchart TD
     end
 
     %% ===== INTEGRATIONS =====
-    subgraph INTEG ["🔌 Integrations"]
+    subgraph INTEG [" Integrations"]
         UC_WEBHOOK["Configure Webhooks"]
         UC_REST_API["Use REST API"]
         UC_CHROME["Chrome Extension Save"]
@@ -99,7 +99,7 @@ flowchart TD
     end
 
     %% ===== OBSERVABILITY =====
-    subgraph OBS ["📈 Observability"]
+    subgraph OBS [" Observability"]
         UC_USAGE["View Usage Dashboard"]
         UC_COST["Track API Costs"]
         UC_AUDIT["View Audit Logs"]
@@ -196,8 +196,8 @@ flowchart TD
 
 | Actor                   | Description                                                                           |
 | ----------------------- | ------------------------------------------------------------------------------------- |
-| **👤 User**             | End user interacting via the web app                                                  |
-| **⚙️ System / Workers** | Background workers handling async processing (ingestion, embedding, KG extraction)    |
-| **🤖 RAG Agent**        | The agentic AI orchestrator that plans, executes tools, evaluates, and retries        |
-| **🧠 LLM (GPT-4o)**     | The language model used for generation, extraction, and evaluation                    |
-| **🔌 External**         | External systems interacting via API, webhooks, or integrations (Slack, Chrome, etc.) |
+| ** User**             | End user interacting via the web app                                                  |
+| ** System / Workers** | Background workers handling async processing (ingestion, embedding, KG extraction)    |
+| ** RAG Agent**        | The agentic AI orchestrator that plans, executes tools, evaluates, and retries        |
+| ** LLM (GPT-4o)**     | The language model used for generation, extraction, and evaluation                    |
+| ** External**         | External systems interacting via API, webhooks, or integrations (Slack, Chrome, etc.) |
