@@ -1,0 +1,57 @@
+import express, { Application, Request, Response } from "express";
+import cors from "cors";
+import cookieParser from "cookie-parser";
+import dotenv from "dotenv";
+import authRoutes from "./modules/auth/auth.routes";
+
+// Initialize env variables
+dotenv.config();
+
+class App {
+  public app: Application;
+  public port: number | string;
+
+  constructor() {
+    this.app = express();
+    this.port = process.env.PORT || 3000;
+
+    this.initializeMiddlewares();
+    this.initializeRoutes();
+  }
+
+  private initializeMiddlewares() {
+    // Basic standard middlewares
+    this.app.use(express.json());
+    this.app.use(cookieParser());
+
+    // CORS configuration for cookies/session exchange
+    this.app.use(
+      cors({
+        origin: "http://localhost:3000", // adjust this as needed for your frontend
+        credentials: true, // Need this to pass cookies front-to-back
+      }),
+    );
+  }
+
+  private initializeRoutes() {
+    // Health check
+    this.app.get("/health", (req: Request, res: Response) => {
+      res
+        .status(200)
+        .json({ status: "ok", timestamp: new Date().toISOString() });
+    });
+
+    // Feature routing
+    this.app.use("/api/auth", authRoutes);
+  }
+
+  public listen() {
+    this.app.listen(this.port, () => {
+      console.log(`🚀 Server is running on http://localhost:${this.port}`);
+    });
+  }
+}
+
+// Instantiate and start
+const server = new App();
+server.listen();
