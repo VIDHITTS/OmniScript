@@ -39,4 +39,41 @@ export class AuthService {
 
     return { user: newUser, token };
   }
+
+  /**
+   * Authenticates a user and returns the user payload alongside a JWT.
+   */
+  public async loginUser(email: string, password: string) {
+    // 1. Find user by email
+    const user = await prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (!user || !user.passwordHash) {
+      throw new Error('Invalid email or password.');
+    }
+
+    // 2. Verify password
+    const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
+    
+    if (!isPasswordValid) {
+      throw new Error('Invalid email or password.');
+    }
+
+    // 3. Update last login
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { lastLogin: new Date() },
+    });
+
+    // 4. Generate JWT
+    const secret = process.env.JWT_SECRET || 'fallback_super_secret_dev_key';
+    const token = jwt.sign(
+      { userId: user.id, email: user.email },
+      secret,
+      { expiresIn: '7d' } // Token lifespan
+    );
+
+    return { user, token };
+  }
 }
