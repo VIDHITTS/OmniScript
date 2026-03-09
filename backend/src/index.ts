@@ -3,6 +3,7 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
 import authRoutes from "./modules/auth/auth.routes";
+import workspaceRoutes from "./modules/workspace/workspace.routes";
 
 // Initialize env variables
 dotenv.config();
@@ -43,6 +44,7 @@ class App {
 
     // Feature routing
     this.app.use("/api/auth", authRoutes);
+    this.app.use("/api/workspaces", workspaceRoutes);
   }
 
   public listen() {
