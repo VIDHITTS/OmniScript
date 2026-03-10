@@ -59,4 +59,40 @@ export class WorkspaceController {
       res.status(500).json({ message: 'Internal server error', error: error.message });
     }
   };
+
+  /**
+   * Put /api/workspaces/:id
+   * Update a workspace.
+   */
+  public update = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const id = req.params.id as string;
+      const { name, description } = req.body;
+
+      if (!name) {
+        res.status(400).json({ message: 'Workspace name is required.' });
+        return;
+      }
+
+      const updatedWorkspace = await this.workspaceService.updateWorkspace(id, name, description);
+      res.status(200).json({ message: 'Workspace updated', workspace: updatedWorkspace });
+    } catch (error: any) {
+      res.status(500).json({ message: 'Internal server error', error: error.message });
+    }
+  };
+
+  /**
+   * Delete /api/workspaces/:id
+   * Delete a workspace.
+   */
+  public delete = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const id = req.params.id as string;
+
+      await this.workspaceService.deleteWorkspace(id);
+      res.status(200).json({ message: 'Workspace deleted successfully' });
+    } catch (error: any) {
+      res.status(500).json({ message: 'Internal server error', error: error.message });
+    }
+  };
 }

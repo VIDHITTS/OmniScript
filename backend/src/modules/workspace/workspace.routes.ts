@@ -10,5 +10,7 @@ router.use(authenticateToken);
 
 router.post('/', workspaceController.create);
 router.get('/', workspaceController.getAll);
+router.put('/:id', workspaceController.update);
+router.delete('/:id', workspaceController.delete);
 
 export default router;

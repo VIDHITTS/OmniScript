@@ -49,4 +49,24 @@ export class WorkspaceService {
 
     return workspaces;
   }
+
+  /**
+   * Update an existing workspace
+   */
+  public async updateWorkspace(workspaceId: string, name: string, description?: string) {
+    const updated = await prisma.workspace.update({
+      where: { id: workspaceId },
+      data: { name, description },
+    });
+    return updated;
+  }
+
+  /**
+   * Delete an existing workspace
+   */
+  public async deleteWorkspace(workspaceId: string) {
+    await prisma.workspace.delete({
+      where: { id: workspaceId },
+    });
+  }
 }
