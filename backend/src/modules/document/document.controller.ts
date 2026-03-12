@@ -60,4 +60,37 @@ export class DocumentController {
       res.status(500).json({ message: 'Internal server error', error: error.message });
     }
   };
+
+  /**
+   * Get /api/workspaces/:workspaceId/documents/:docId
+   */
+  public getOne = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const docId = req.params.docId as string;
+      const document = await this.documentService.getDocument(docId);
+
+      if (!document) {
+        res.status(404).json({ message: 'Document not found' });
+        return;
+      }
+
+      res.status(200).json({ document });
+    } catch (error: any) {
+      res.status(500).json({ message: 'Internal server error', error: error.message });
+    }
+  };
+
+  /**
+   * Delete /api/workspaces/:workspaceId/documents/:docId
+   */
+  public delete = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const docId = req.params.docId as string;
+      await this.documentService.deleteDocument(docId);
+
+      res.status(200).json({ message: 'Document deleted successfully' });
+    } catch (error: any) {
+      res.status(500).json({ message: 'Internal server error', error: error.message });
+    }
+  };
 }

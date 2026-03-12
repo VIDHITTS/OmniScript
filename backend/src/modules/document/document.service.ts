@@ -32,4 +32,22 @@ export class DocumentService {
     });
     return documents;
   }
+
+  /**
+   * Get single document
+   */
+  public async getDocument(documentId: string) {
+    return prisma.document.findUnique({
+      where: { id: documentId },
+    });
+  }
+
+  /**
+   * Delete document
+   */
+  public async deleteDocument(documentId: string) {
+    return prisma.document.delete({
+      where: { id: documentId },
+    });
+  }
 }

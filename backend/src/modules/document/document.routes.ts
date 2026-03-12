@@ -10,5 +10,7 @@ router.use(authenticateToken);
 
 router.post('/', documentController.upload);
 router.get('/', documentController.list);
+router.get('/:docId', documentController.getOne);
+router.delete('/:docId', documentController.delete);
 
 export default router;
