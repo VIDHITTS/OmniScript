@@ -9,10 +9,29 @@ export default function Home() {
   const [workspaceName, setWorkspaceName] = useState("");
   const [fileName, setFileName] = useState("");
   const [isMounted, setIsMounted] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
 
   useEffect(() => {
     setIsMounted(true);
   }, []);
+
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      setFileName(e.dataTransfer.files[0].name);
+    }
+  };
 
   if (!isMounted) return null; // Hydration fix
 
@@ -84,8 +103,17 @@ export default function Home() {
                 Add your first piece of knowledge to your vault. We'll simulate the upload for our guest experience.
               </p>
               
-              <div className="mt-6 ml-14 border-2 border-dashed border-gray-300 dark:border-[#3b3833] rounded-2xl p-10 flex flex-col items-center justify-center text-center bg-[#fafafa] dark:bg-[#1a1916]">
-                <UploadCloud className="w-14 h-14 text-[var(--muted)] mb-6" />
+              <div 
+                className={`mt-6 ml-14 border-2 border-dashed rounded-2xl p-10 flex flex-col items-center justify-center text-center transition-all bg-[#fafafa] dark:bg-[#1a1916] ${
+                  isDragging 
+                  ? "border-[var(--accent)] bg-[var(--background-alt)] dark:bg-[var(--background-alt)] opacity-80" 
+                  : "border-gray-300 dark:border-[#3b3833]"
+                }`}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+              >
+                <UploadCloud className={`w-14 h-14 mb-6 transition-colors ${isDragging ? "text-[var(--accent)]" : "text-[var(--muted)]"}`} />
                 <p className="text-xl font-medium mb-2 text-[var(--foreground)]">Drag and drop, or type a mock filename</p>
                 <p className="text-md text-[var(--muted)] mb-8">PDF, JSON, TXT, MD supported</p>
                 
