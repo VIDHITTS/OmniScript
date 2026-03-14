@@ -1,0 +1,27 @@
+{
+  "name": "omniscript",
+  "version": "1.0.0",
+  "description": "> AI-powered knowledge OS — ingest, search, and converse with your documents.",
+  "main": "index.js",
+  "scripts": {
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "install:all": "cd backend && npm install && cd ../frontend && npm install"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VIDHITTS/OmniScript.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/VIDHITTS/OmniScript/issues"
+  },
+  "homepage": "https://github.com/VIDHITTS/OmniScript#readme",
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
