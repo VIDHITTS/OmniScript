@@ -4,11 +4,12 @@
 // Once we move back to Postgres, we can update these with Unsupported("vector") or tsvector.
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider = "mysql"
+  provider = "postgresql"
 }
 
 // ===== ENUMS =====
