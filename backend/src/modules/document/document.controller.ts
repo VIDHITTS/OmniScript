@@ -25,7 +25,7 @@ export class DocumentController {
          return;
       }
 
-      const file = req.file;
+      const { file } = req;
       const { title, sourceType } = req.body;
 
       if (!title || !sourceType) {
@@ -46,7 +46,7 @@ export class DocumentController {
       // 1) If it's a file, Stream raw buffer to GridFS
       if (file) {
         const docStream = streamifier.createReadStream(file.buffer);
-        
+
         storageUrl = await gridFsStorage.upload(docStream, {
           filename: file.originalname,
           contentType: file.mimetype,

@@ -6,16 +6,16 @@ export class DocumentService {
    * Create a new document reference in a workspace.
    */
   public async createDocument(
-    workspaceId: string, 
-    userId: string, 
-    title: string, 
-    originalFilename: string, 
-    mimeType: string, 
-    fileSizeBytes: number, 
+    workspaceId: string,
+    userId: string,
+    title: string,
+    originalFilename: string,
+    mimeType: string,
+    fileSizeBytes: number,
     sourceType: SourceType,
     storageUrl: string
   ) {
-    const document = await prisma.document.create({
+    return prisma.document.create({
       data: {
         workspaceId,
         uploadedById: userId,
@@ -28,23 +28,19 @@ export class DocumentService {
         status: 'QUEUED' // Background worker will pick this up
       },
     });
-    return document;
   }
 
   /**
    * Get all documents in a workspace
    */
   public async getWorkspaceDocuments(workspaceId: string) {
-    const documents = await prisma.document.findMany({
+    return prisma.document.findMany({
       where: {
         workspaceId,
       },
       orderBy: { createdAt: 'desc' },
     });
-    return documents;
-  }
-
-  /**
+  }  /**
    * Get single document
    */
   public async getDocument(documentId: string) {
