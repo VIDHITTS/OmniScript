@@ -2,8 +2,13 @@ import express, { Application, Request, Response } from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
+
 import authRoutes from "./modules/auth/auth.routes";
 import workspaceRoutes from "./modules/workspace/workspace.routes";
+
+import { env } from "./config/env";
+import { logger } from "./utils/logger";
+import { gridFsStorage } from "./lib/storage/GridFsStorageService";
 
 // Initialize env variables
 dotenv.config();
@@ -14,7 +19,7 @@ class App {
 
   constructor() {
     this.app = express();
-    this.port = process.env.PORT || 3000;
+    this.port = env.PORT;
 
     this.initializeMiddlewares();
     this.initializeRoutes();
@@ -47,10 +52,18 @@ class App {
     this.app.use("/api/workspaces", workspaceRoutes);
   }
 
-  public listen() {
-    this.app.listen(this.port, () => {
-      console.log(`🚀 Server is running on http://localhost:${this.port}`);
-    });
+  public async listen() {
+    try {
+      // Connect to GridFS for storing binary files (PDFs, Audio, etc)
+      await gridFsStorage.connect();
+
+      this.app.listen(this.port, () => {
+        logger.info(`🚀 Server is running on http://localhost:${this.port}`);
+      });
+    } catch (error) {
+      logger.error(error, "❌ Error starting server");
+      process.exit(1);
+    }
   }
 }
 

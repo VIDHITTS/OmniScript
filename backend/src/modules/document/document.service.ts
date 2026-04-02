@@ -5,7 +5,16 @@ export class DocumentService {
   /**
    * Create a new document reference in a workspace.
    */
-  public async createDocument(workspaceId: string, userId: string, title: string, originalFilename: string, mimeType: string, fileSizeBytes: number, sourceType: SourceType) {
+  public async createDocument(
+    workspaceId: string, 
+    userId: string, 
+    title: string, 
+    originalFilename: string, 
+    mimeType: string, 
+    fileSizeBytes: number, 
+    sourceType: SourceType,
+    storageUrl: string
+  ) {
     const document = await prisma.document.create({
       data: {
         workspaceId,
@@ -15,6 +24,8 @@ export class DocumentService {
         mimeType,
         fileSizeBytes,
         sourceType,
+        storageUrl, // GridFS ID
+        status: 'QUEUED' // Background worker will pick this up
       },
     });
     return document;
