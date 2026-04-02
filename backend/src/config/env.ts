@@ -1,0 +1,19 @@
+import { z } from 'zod';
+import dotenv from 'dotenv';
+dotenv.config();
+
+const envSchema = z.object({
+  PORT: z.string().default('3000'),
+  DATABASE_URL: z.string().url(),
+  MONGO_URI: z.string().url().default('mongodb://localhost:27017/omniscript_files'),
+  JWT_SECRET: z.string().min(10).default('default_minimum_length_secret_12345'),
+});
+
+const _env = envSchema.safeParse(process.env);
+
+if (!_env.success) {
+  console.error("❌ Invalid environment variables:", _env.error.format());
+  process.exit(1);
+}
+
+export const env = _env.data;
