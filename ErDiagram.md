@@ -2,7 +2,7 @@
 
 ## Overview
 
-Complete database schema for OmniScript — 17 tables covering identity, ingestion, knowledge graph, agentic RAG, collaboration, and observability.
+Complete database schema for OmniScript — 18 tables covering identity, ingestion, document structure (PageIndex), knowledge graph, agentic RAG, collaboration, and observability.
 
 ---
 
@@ -18,7 +18,7 @@ erDiagram
         enum auth_provider "LOCAL | GOOGLE | GITHUB"
         string oauth_id "nullable"
         boolean mfa_enabled
-        string mfa_secret "nullable, encrypted"
+        string mfa_secret "nullable, encrypted AES-256"
         timestamp email_verified_at
         timestamp created_at
         timestamp last_login
@@ -32,7 +32,7 @@ erDiagram
         uuid owner_id FK
         enum template "CUSTOM | RESEARCH | COURSE | LEGAL | MEETING"
         boolean is_public
-        jsonb settings "chunk_size, overlap, model preferences"
+        jsonb settings "chunk_size, overlap, model preferences, storage_backend"
         timestamp created_at
         timestamp updated_at
     }
@@ -48,7 +48,7 @@ erDiagram
     API_KEYS {
         uuid id PK
         uuid user_id FK
-        string key_hash UK "hashed, never stored raw"
+        string key_hash UK "SHA-256 hashed, never stored raw"
         string name "My CLI Key"
         jsonb permissions "read, write, admin scopes"
         timestamp expires_at
@@ -63,7 +63,8 @@ erDiagram
         uuid uploaded_by FK
         string title
         string original_filename
-        string storage_url "S3 or MinIO URL"
+        string storage_url "GridFS ID or S3 URL"
+        string storage_backend "GRIDFS | S3"
         string mime_type
         bigint file_size_bytes
         enum source_type "PDF | MARKDOWN | TEXT | YOUTUBE | WEB_URL | AUDIO | IMAGE | CODE | CSV"
@@ -72,7 +73,7 @@ erDiagram
         int total_chunks
         int token_count
         jsonb metadata "author, tags, page_count, duration, language"
-        tsvector search_vector "full-text search index"
+        tsvector search_vector "document-level full-text search index"
         timestamp processed_at
         timestamp created_at
     }
@@ -80,13 +81,29 @@ erDiagram
     DOCUMENT_CHUNKS {
         uuid id PK
         uuid document_id FK
-        text content "The actual text segment"
-        vector embedding "dim 1536 OpenAI"
+        text content "Original text segment (for display)"
+        text contextualized_content "Context-enriched text (for embedding)"
+        vector embedding "dim 1536 OpenAI, HNSW indexed"
         int chunk_index "Order in original doc"
         int token_count
         string section_heading "nullable"
         jsonb location "page_num, start_time, end_time, line_range"
-        tsvector search_vector "BM25 full-text index"
+        tsvector search_vector "BM25 full-text index, GIN indexed"
+        float rerank_score "nullable, last cross-encoder score"
+        timestamp created_at
+    }
+
+    %% ===== DOCUMENT STRUCTURE (PAGEINDEX) =====
+    DOCUMENT_STRUCTURE {
+        uuid id PK
+        uuid document_id FK
+        uuid parent_id FK "nullable, self-referential tree"
+        int level "0=document, 1=chapter, 2=section, 3=subsection"
+        string title "Section heading"
+        int page_start "nullable"
+        int page_end "nullable"
+        text summary "nullable, LLM-generated section summary"
+        int child_order "Ordering among siblings"
         timestamp created_at
     }
 
@@ -95,6 +112,7 @@ erDiagram
         uuid id PK
         uuid workspace_id FK
         string name "Einstein, Photosynthesis, BRCA1"
+        string normalized_name "lowercase deduplicated name"
         enum entity_type "PERSON | ORG | CONCEPT | DATE | LOCATION | EVENT | TERM"
         text description "Short LLM-generated description"
         int mention_count "How many chunks reference this"
@@ -134,14 +152,16 @@ erDiagram
     MESSAGES {
         uuid id PK
         uuid session_id FK
+        uuid user_id FK "nullable, null for AI messages"
         enum role "USER | ASSISTANT | SYSTEM | TOOL"
         text content
         jsonb citations "Array of chunk_id and score and location"
         jsonb tool_calls "Array of tool_name and input and output for agentic RAG"
         jsonb suggested_followups "Array of 3 suggested questions"
         int token_usage
-        float confidence_score "0.0 to 1.0 self-evaluated"
+        float confidence_score "0.0 to 1.0 self-evaluated by CRAG grader"
         boolean is_bookmarked
+        enum retrieval_strategy "FAST | AGENTIC | PAGEINDEX, what router chose"
         timestamp created_at
     }
 
@@ -163,7 +183,7 @@ erDiagram
         enum artifact_type "SUMMARY | FLASHCARD_SET | MIND_MAP | TIMELINE | STUDY_GUIDE | COMPARISON | GLOSSARY"
         string title
         jsonb content "The artifact data as structured JSON"
-        string export_url "nullable, S3 link to exported file"
+        string export_url "nullable, storage link to exported file"
         timestamp created_at
     }
 
@@ -209,6 +229,7 @@ erDiagram
         int documents_processed
         int tokens_consumed_embedding
         int tokens_consumed_chat
+        int tokens_consumed_reranking
         float estimated_cost_usd
     }
 
@@ -219,7 +240,7 @@ erDiagram
         uuid workspace_id FK "nullable, workspace-scoped or global"
         string url "target URL"
         enum event "DOCUMENT_INDEXED | DOCUMENT_FAILED | CHAT_COMPLETED"
-        string secret "HMAC signing secret"
+        string secret "HMAC-SHA256 signing secret"
         boolean is_active
         timestamp last_triggered_at
         timestamp created_at
@@ -237,6 +258,8 @@ erDiagram
     WORKSPACES ||--o{ DOCUMENTS : "contains"
     USERS ||--o{ DOCUMENTS : "uploads"
     DOCUMENTS ||--o{ DOCUMENT_CHUNKS : "split into"
+    DOCUMENTS ||--o{ DOCUMENT_STRUCTURE : "structured as"
+    DOCUMENT_STRUCTURE ||--o{ DOCUMENT_STRUCTURE : "parent-child"
 
     %% Knowledge Graph
     WORKSPACES ||--o{ KG_ENTITIES : "has entities"
@@ -276,53 +299,67 @@ erDiagram
 
 ## Key Indexes
 
-| Table              | Index                                      | Purpose                                |
-| ------------------ | ------------------------------------------ | -------------------------------------- |
-| `DOCUMENT_CHUNKS`  | **HNSW** on `embedding`                    | Millisecond vector similarity search   |
-| `DOCUMENT_CHUNKS`  | **GIN** on `search_vector`                 | BM25-style full-text search            |
-| `DOCUMENTS`        | **GIN** on `search_vector`                 | Document-level full-text search        |
-| `DOCUMENTS`        | `(workspace_id, status)`                   | Find processing/stuck documents        |
-| `MESSAGES`         | `(session_id, created_at)`                 | Load chat history chronologically      |
-| `CHAT_SESSIONS`    | `(user_id, last_active_at DESC)`           | "Recent Chats" sidebar                 |
-| `DOCUMENT_CHUNKS`  | `(document_id)`                            | Cascade delete chunks when doc deleted |
-| `KG_ENTITIES`      | `(workspace_id, entity_type)`              | Filter graph by entity type            |
-| `KG_EDGES`         | `(source_entity_id)`, `(target_entity_id)` | Graph traversal                        |
-| `KG_ENTITY_CHUNKS` | `(entity_id)`, `(chunk_id)`                | Entity-Chunk lookups                   |
-| `ACTIVITY_LOG`     | `(workspace_id, created_at DESC)`          | Activity feed pagination               |
-| `AUDIT_LOG`        | `(user_id, created_at DESC)`               | Security audit trail                   |
-| `USAGE_METRICS`    | `(user_id, metric_date)`                   | Daily usage aggregation                |
-| `API_KEYS`         | `(key_hash)`                               | Fast API key lookup on every request   |
-| `MESSAGE_FEEDBACK` | `(message_id)`                             | Aggregate feedback per message         |
+| Table                | Index                                              | Purpose                                  |
+| -------------------- | -------------------------------------------------- | ---------------------------------------- |
+| `DOCUMENT_CHUNKS`    | **HNSW** on `embedding`                            | Millisecond vector similarity search     |
+| `DOCUMENT_CHUNKS`    | **GIN** on `search_vector`                         | BM25-style full-text search              |
+| `DOCUMENTS`          | **GIN** on `search_vector`                         | Document-level full-text search          |
+| `DOCUMENTS`          | `(workspace_id, status)`                           | Find processing/stuck documents          |
+| `DOCUMENT_STRUCTURE` | `(document_id, level, child_order)`                | PageIndex tree traversal                 |
+| `DOCUMENT_STRUCTURE` | `(parent_id)`                                      | Child lookup for tree navigation         |
+| `MESSAGES`           | `(session_id, created_at)`                         | Load chat history chronologically        |
+| `CHAT_SESSIONS`      | `(user_id, last_active_at DESC)`                   | "Recent Chats" sidebar                   |
+| `DOCUMENT_CHUNKS`    | `(document_id)`                                    | Cascade delete chunks when doc deleted   |
+| `KG_ENTITIES`        | `(workspace_id, entity_type)`                      | Filter graph by entity type              |
+| `KG_ENTITIES`        | `(workspace_id, normalized_name)` UNIQUE           | Entity deduplication                     |
+| `KG_EDGES`           | `(source_entity_id)`, `(target_entity_id)`         | Graph traversal                          |
+| `KG_ENTITY_CHUNKS`   | `(entity_id)`, `(chunk_id)`                        | Entity-Chunk lookups                     |
+| `ACTIVITY_LOG`       | `(workspace_id, created_at DESC)`                  | Activity feed pagination                 |
+| `AUDIT_LOG`          | `(user_id, created_at DESC)`                       | Security audit trail                     |
+| `USAGE_METRICS`      | `(user_id, metric_date)`                           | Daily usage aggregation                  |
+| `API_KEYS`           | `(key_hash)`                                       | Fast API key lookup on every request     |
+| `MESSAGE_FEEDBACK`   | `(message_id)`                                     | Aggregate feedback per message           |
 
 ---
 
 ## Architecture Decisions
 
-### 1. Hybrid Search (Vector + Full-Text in Postgres)
+### 1. Modern Retrieval Pipeline (Not Naive RAG)
 
-Both `DOCUMENT_CHUNKS` and `DOCUMENTS` have `tsvector` columns alongside `vector` embeddings. Vector search catches semantic matches, full-text search catches exact terms. Reciprocal Rank Fusion (RRF) merges both — no external search engine needed.
+The retrieval pipeline uses 4 stages: Hybrid Search (vector + BM25 via RRF), PageIndex Navigation (for structured docs), Cross-Encoder Reranking (Cohere), and CRAG Grading (self-correcting evaluation). This is the 2025-2026 production-grade approach, not 2023-era chunk-embed-search.
 
-### 2. Knowledge Graph in Postgres (Not Neo4j)
+### 2. Document Structure Index (PageIndex)
 
-`KG_ENTITIES`, `KG_EDGES`, and `KG_ENTITY_CHUNKS` use standard foreign keys. The graph is workspace-scoped and moderate-sized (thousands of nodes, not billions), so Postgres handles it fine with recursive CTEs and proper indexing. Can migrate to Neo4j later if needed.
+`DOCUMENT_STRUCTURE` stores a hierarchical tree of each document's structure (chapters → sections → subsections). The `PageIndexNavigationTool` lets the agent navigate this tree using LLM reasoning — far more accurate than blind vector search for structured, long-form documents.
 
-### 3. Agentic RAG via Tool Calls (MESSAGES table)
+### 3. Contextual Retrieval (Enriched Chunks)
 
-Messages store a `tool_calls` JSONB column with the agent's reasoning steps — searches performed, queries rephrased, tools selected. This creates a debuggable, replayable audit trail of how every answer was generated.
+`DOCUMENT_CHUNKS` stores both `content` (original text for display) and `contextualized_content` (enriched with document title + section context for embedding). This prevents ambiguous chunks from losing meaning during vector search.
 
-### 4. Conversation Branching (Self-Referential CHAT_SESSIONS)
+### 4. File Storage Abstraction (MongoDB GridFS / S3)
+
+Documents reference a `storage_url` and `storage_backend` field. Storage is abstracted behind a `StorageService` interface. Default: MongoDB GridFS (simpler, no extra service). Production: S3/MinIO (CDN, presigned URLs). Switching is a config change.
+
+### 5. Knowledge Graph in Postgres (Not Neo4j)
+
+`KG_ENTITIES`, `KG_EDGES`, and `KG_ENTITY_CHUNKS` use standard foreign keys. The graph is workspace-scoped and moderate-sized (thousands of nodes, not billions), so Postgres handles it fine with recursive CTEs and proper indexing. `normalized_name` ensures deduplication.
+
+### 6. Agentic RAG via Tool Registry (Claude Code-Inspired)
+
+Messages store a `tool_calls` JSONB column with the agent's reasoning steps — searches performed, queries rephrased, tools selected. Tools follow a `buildTool()` pattern with Zod schemas, creating a debuggable, replayable audit trail. The `retrieval_strategy` field on messages tracks which path the adaptive router chose.
+
+### 7. Conversation Branching (Self-Referential CHAT_SESSIONS)
 
 `CHAT_SESSIONS` has a `parent_session_id` FK pointing to itself, enabling tree-structured conversations — users can explore tangents without losing the original thread.
 
-### 5. Feedback Loop (MESSAGE_FEEDBACK)
+### 8. Feedback Loop (MESSAGE_FEEDBACK)
 
 Users rate AI answers as GOOD / BAD / PARTIAL. Creates a labeled dataset for evaluating and improving RAG quality over time.
 
-### 6. Webhook and API Key System
+### 9. Webhook and API Key System
 
-`WEBHOOKS` for push notifications, `API_KEYS` for programmatic access. Makes OmniScript a platform — external tools (Slack bots, Chrome extensions, CI/CD) can integrate via API.
+`WEBHOOKS` for push notifications, `API_KEYS` for programmatic access. HMAC-SHA256 signed payloads for webhook verification.
 
-### 7. Multi-Granularity Observability
+### 10. Multi-Granularity Observability
 
-Three separate tables: `ACTIVITY_LOG` (workspace-level), `AUDIT_LOG` (security), `USAGE_METRICS` (billing). Each serves a different audience and concern.
- 
+Three separate tables: `ACTIVITY_LOG` (workspace-level), `AUDIT_LOG` (security), `USAGE_METRICS` (billing with `tokens_consumed_reranking` tracking). Each serves a different audience and concern.

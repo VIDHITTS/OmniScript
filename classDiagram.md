@@ -2,7 +2,7 @@
 
 ## Overview
 
-Domain model covering core entities, agentic RAG components, knowledge graph, collaboration, and observability.
+Domain model covering core entities, modern retrieval pipeline (PageIndex, HyDE, CRAG), agentic tool system (Claude Code-inspired), knowledge graph, collaboration, and observability.
 
 ```mermaid
 classDiagram
@@ -17,6 +17,8 @@ classDiagram
         +Boolean mfa_enabled
         +register()
         +login()
+        +verifyEmail()
+        +resetPassword()
         +enableMFA()
         +createWorkspace()
         +generateApiKey()
@@ -57,6 +59,7 @@ classDiagram
         +UUID id
         +String title
         +String storage_url
+        +String storage_backend
         +SourceType source_type
         +ProcessingStatus status
         +String mime_type
@@ -71,19 +74,59 @@ classDiagram
     class Chunk {
         +UUID id
         +String content
+        +String contextualized_content
         +Vector embedding
         +Int chunk_index
         +Int token_count
         +String section_heading
         +JSON location
+        +Float rerank_score
         +vectorSearch()
         +fullTextSearch()
+    }
+
+    class DocumentStructure {
+        +UUID id
+        +UUID document_id
+        +UUID parent_id
+        +Int level
+        +String title
+        +Int page_start
+        +Int page_end
+        +String summary
+        +Int child_order
+        +getChildren()
+        +getPath()
+    }
+
+    %% ===== STORAGE ABSTRACTION =====
+    class StorageService {
+        <<interface>>
+        +upload(file, path) url
+        +download(url) stream
+        +delete(url) void
+        +getUrl(url, ttl) signedUrl
+    }
+
+    class GridFSStorage {
+        +upload(file, path) gridfsId
+        +download(gridfsId) stream
+        +delete(gridfsId) void
+        +getUrl(gridfsId) streamUrl
+    }
+
+    class S3Storage {
+        +upload(file, path) s3Url
+        +download(s3Url) stream
+        +delete(s3Url) void
+        +getUrl(s3Url, ttl) presignedUrl
     }
 
     %% ===== KNOWLEDGE GRAPH =====
     class KGEntity {
         +UUID id
         +String name
+        +String normalized_name
         +EntityType entity_type
         +String description
         +Int mention_count
@@ -99,44 +142,76 @@ classDiagram
         +traverse()
     }
 
-    %% ===== AGENTIC RAG =====
+    %% ===== MODERN RAG PIPELINE =====
+    class QueryRouter {
+        +classifyQuery(query) QueryType
+        +route(query, context) RetrievalStrategy
+    }
+
     class Agent {
-        +plan(query)
-        +selectTool(context)
+        +plan(query, tools)
+        +executeTool(toolName, input)
         +evaluate(results)
         +retry(refinedQuery)
         +synthesize(chunks)
         +cite(sources)
+        +checkTokenBudget()
+    }
+
+    class CRAGGrader {
+        +evaluate(query, chunks) Verdict
     }
 
     class AgentTool {
         <<interface>>
         +String name
-        +execute(input) output
+        +String description
+        +ZodSchema inputSchema
+        +execute(input, context) ToolResult
+        +isEnabled() boolean
     }
 
     class VectorSearchTool {
-        +execute(query, workspaceId, topK)
+        +execute(query, workspaceId, topK) chunks
     }
 
     class KeywordSearchTool {
-        +execute(query, workspaceId)
+        +execute(query, workspaceId) chunks
+    }
+
+    class PageIndexNavigationTool {
+        +execute(query, documentId) sections
+    }
+
+    class HyDESearchTool {
+        +execute(query, workspaceId) chunks
     }
 
     class MetadataFilterTool {
-        +execute(filters)
+        +execute(filters) chunks
     }
 
     class GraphTraversalTool {
-        +execute(entityName, depth)
+        +execute(entityName, depth) entities
     }
 
     class SummarizeTool {
-        +execute(documentId)
+        +execute(documentId) summary
     }
 
     class CompareTool {
-        +execute(docId1, docId2)
+        +execute(docId1, docId2) comparison
+    }
+
+    class CrossEncoderReranker {
+        +rerank(query, chunks, topK) rankedChunks
+    }
+
+    class TokenBudgetTracker {
+        +Int continuationCount
+        +Int lastDeltaTokens
+        +Float completionThreshold
+        +checkBudget(consumed, budget) ContinueOrStop
     }
 
     %% ===== CONVERSATION =====
@@ -158,6 +233,7 @@ classDiagram
         +JSON tool_calls
         +JSON suggested_followups
         +Float confidence_score
+        +RetrievalStrategy retrieval_strategy
         +Boolean is_bookmarked
         +bookmark()
     }
@@ -205,6 +281,7 @@ classDiagram
         +Date metric_date
         +Int queries_count
         +Int tokens_consumed
+        +Int tokens_consumed_reranking
         +Float estimated_cost_usd
     }
 
@@ -255,6 +332,20 @@ classDiagram
         TOOL
     }
 
+    class RetrievalStrategy {
+        <<enumeration>>
+        FAST
+        AGENTIC
+        PAGEINDEX
+    }
+
+    class CRAGVerdict {
+        <<enumeration>>
+        RELEVANT
+        AMBIGUOUS
+        IRRELEVANT
+    }
+
     class ArtifactType {
         <<enumeration>>
         SUMMARY
@@ -278,6 +369,13 @@ classDiagram
     Workspace "1" --> "*" Document : contains
     User "1" --> "*" Document : uploads
     Document "1" --> "*" Chunk : splits into
+    Document "1" --> "*" DocumentStructure : structured as
+    DocumentStructure "1" --> "*" DocumentStructure : has children
+
+    %% Storage
+    StorageService <|-- GridFSStorage : implements
+    StorageService <|-- S3Storage : implements
+    Document --> StorageService : stored via
 
     %% Knowledge Graph
     Workspace "1" --> "*" KGEntity : has entities
@@ -285,14 +383,21 @@ classDiagram
     KGEntity "1" --> "*" KGEdge : target of
     Chunk "*" --> "*" KGEntity : mentions
 
-    %% Agentic RAG
-    Agent "1" --> "*" AgentTool : uses
+    %% Modern RAG Pipeline
+    QueryRouter --> Agent : routes complex queries
+    QueryRouter --> CrossEncoderReranker : routes simple queries
+    Agent "1" --> "*" AgentTool : selects and uses
+    Agent --> CRAGGrader : evaluates retrieval
+    Agent --> TokenBudgetTracker : monitors budget
     AgentTool <|-- VectorSearchTool : implements
     AgentTool <|-- KeywordSearchTool : implements
+    AgentTool <|-- PageIndexNavigationTool : implements
+    AgentTool <|-- HyDESearchTool : implements
     AgentTool <|-- MetadataFilterTool : implements
     AgentTool <|-- GraphTraversalTool : implements
     AgentTool <|-- SummarizeTool : implements
     AgentTool <|-- CompareTool : implements
+    CRAGGrader --> CRAGVerdict : returns
 
     %% Conversation
     User "1" --> "*" ChatSession : initiates
@@ -320,11 +425,17 @@ classDiagram
 
 ## Key Design Patterns
 
-| Pattern                | Where Used                               | Why                                                        |
-| ---------------------- | ---------------------------------------- | ---------------------------------------------------------- |
-| **Strategy Pattern**   | `AgentTool` interface + concrete tools   | Agent dynamically selects which retrieval tool to use      |
-| **Observer Pattern**   | `Webhook` system                         | External systems get notified of events without polling    |
-| **Composite Pattern**  | `ChatSession` self-reference (branching) | Tree-structured conversations                              |
-| **Builder Pattern**    | `Artifact.generate()`                    | Complex artifact generation with step-by-step construction |
-| **Repository Pattern** | All database access                      | Clean separation between domain logic and data access      |
- 
+| Pattern                | Where Used                                                   | Why                                                              |
+| ---------------------- | ------------------------------------------------------------ | ---------------------------------------------------------------- |
+| **Strategy Pattern**   | `AgentTool` interface + concrete tools                       | Agent dynamically selects which retrieval tool to use            |
+| **Strategy Pattern**   | `StorageService` + GridFS/S3                                 | Swap file storage backend via config                             |
+| **Strategy Pattern**   | `QueryRouter` + Fast/Agentic/PageIndex paths                 | Adaptive routing based on query complexity                       |
+| **Builder Pattern**    | `buildTool()` helper (Claude Code-inspired)                  | Provide defaults, ensure consistent tool interface               |
+| **Registry Pattern**   | `tool-registry.ts` central tool list                         | Single source of truth for all available tools                   |
+| **Observer Pattern**   | `Webhook` system                                             | External systems get notified of events without polling          |
+| **Composite Pattern**  | `ChatSession` self-reference (branching)                     | Tree-structured conversations                                    |
+| **Composite Pattern**  | `DocumentStructure` self-reference (PageIndex)               | Tree-structured document hierarchy for navigation                |
+| **Builder Pattern**    | `Artifact.generate()`                                        | Complex artifact generation with step-by-step construction       |
+| **Repository Pattern** | All database access via services                             | Clean separation between domain logic and data access            |
+| **Chain of Responsibility** | Query → Hybrid → Rerank → CRAG → Synthesize           | Multi-stage retrieval with each stage filtering/improving        |
+| **Token Budget**       | `TokenBudgetTracker` (Claude Code-inspired)                  | Prevent runaway LLM costs with diminishing-returns detection     |
