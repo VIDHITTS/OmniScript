@@ -1,18 +1,27 @@
-import { z } from 'zod';
-import dotenv from 'dotenv';
+import { z } from "zod";
+import dotenv from "dotenv";
 dotenv.config();
 
 const envSchema = z.object({
-  PORT: z.string().default('3000'),
+  PORT: z.coerce.number().default(3000),
+  NODE_ENV: z
+    .enum(["development", "test", "production"])
+    .default("development"),
   DATABASE_URL: z.string().url(),
-  MONGO_URI: z.string().url().default('mongodb://localhost:27017/omniscript_files'),
-  JWT_SECRET: z.string().min(10).default('default_minimum_length_secret_12345'),
+  MONGO_URI: z.string().url(),
+  REDIS_URL: z.string().url(),
+  JWT_SECRET: z.string().min(10),
+  JWT_REFRESH_SECRET: z.string().min(10),
+  GROQ_API_KEY: z.string().min(1),
+  COHERE_API_KEY: z.string().min(1),
+  STORAGE_BACKEND: z.enum(["GRIDFS", "S3"]).default("GRIDFS"),
+  CORS_ORIGIN: z.string().url().default("http://localhost:3000"),
 });
 
 const _env = envSchema.safeParse(process.env);
 
 if (!_env.success) {
-  console.error("❌ Invalid environment variables:", _env.error.format());
+  console.error("Invalid environment variables:", _env.error.format());
   process.exit(1);
 }
 

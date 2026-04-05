@@ -1,4 +1,4 @@
-import { groqClient } from './groq';
+import { groq } from './groq';
 import { env } from '../config/env';
 import { logger } from '../utils/logger';
 
@@ -81,8 +81,8 @@ export async function enrichChunkContext(
   sectionHeading: string
 ): Promise<string> {
   try {
-    const response = await groqClient.chat.completions.create({
-      model: env.LLM_MODEL,
+    const response = await groq.chat.completions.create({
+      model: "llama3-8b-8192",
       messages: [
         {
           role: 'system',

@@ -1,5 +1,5 @@
 import { prisma } from '../config/db';
-import { DocumentStatus } from '@prisma/client';
+import { Status } from '@prisma/client';
 import { gridFsStorage } from '../lib/storage/GridFsStorageService';
 import { TextExtractor, streamToBuffer } from '../lib/textExtractor';
 import { SemanticChunker } from '../lib/chunker';
@@ -82,20 +82,20 @@ async function processDocument(documentId: string, retryCount = 0): Promise<void
     }
 
     // Skip if already indexed
-    if (document.status === DocumentStatus.INDEXED) {
+    if (document.status === Status.INDEXED) {
       logger.info({ documentId }, 'Document already indexed, skipping');
       return;
     }
 
     // 2. Update status → PROCESSING
-    await updateStatus(documentId, DocumentStatus.PROCESSING);
+    await updateStatus(documentId, Status.PROCESSING);
 
     // 3. Download file from storage
     let fileBuffer: Buffer;
     if (document.sourceType === 'WEB_URL' || document.sourceType === 'YOUTUBE') {
       // Phase 1: Skip external sources
       logger.warn({ documentId, sourceType: document.sourceType }, 'External source processing not yet implemented');
-      await updateStatus(documentId, DocumentStatus.FAILED, 'External source processing not yet implemented');
+      await updateStatus(documentId, Status.FAILED, 'External source processing not yet implemented');
       return;
     }
 
@@ -109,18 +109,18 @@ async function processDocument(documentId: string, retryCount = 0): Promise<void
     );
 
     if (!text || text.trim().length === 0) {
-      await updateStatus(documentId, DocumentStatus.FAILED, 'No text extracted from document');
+      await updateStatus(documentId, Status.FAILED, 'No text extracted from document');
       return;
     }
 
     // 5. Update status → CHUNKING
-    await updateStatus(documentId, DocumentStatus.CHUNKING);
+    await updateStatus(documentId, Status.CHUNKING);
 
     // 6. Semantic chunking
     const chunks = chunker.chunk(text, document.title);
 
     // 7. Update status → EMBEDDING
-    await updateStatus(documentId, DocumentStatus.EMBEDDING);
+    await updateStatus(documentId, Status.EMBEDDING);
 
     // 8. Contextual enrichment + embedding for each chunk
     const chunkRecords = [];
@@ -157,7 +157,7 @@ async function processDocument(documentId: string, retryCount = 0): Promise<void
     await prisma.document.update({
       where: { id: documentId },
       data: {
-        status: DocumentStatus.INDEXED,
+        status: Status.INDEXED,
         totalChunks: chunks.length,
         tokenCount: totalTokens,
         processedAt: new Date(),
@@ -186,14 +186,14 @@ async function processDocument(documentId: string, retryCount = 0): Promise<void
     } else {
       await updateStatus(
         documentId,
-        DocumentStatus.FAILED,
+        Status.FAILED,
         error instanceof Error ? error.message : 'Unknown processing error'
       );
     }
   }
 }
 
-async function updateStatus(documentId: string, status: DocumentStatus, errorMessage?: string): Promise<void> {
+async function updateStatus(documentId: string, status: Status, errorMessage?: string): Promise<void> {
   await prisma.document.update({
     where: { id: documentId },
     data: {

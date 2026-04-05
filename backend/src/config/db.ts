@@ -16,7 +16,9 @@ class Database {
   public static getInstance(): PrismaClient {
     if (!Database.instance) {
       const pool = new Pool({
-        connectionString: process.env.DATABASE_URL || "postgresql://vidhitt.s@localhost:5432/omniscript",
+        connectionString:
+          process.env.DATABASE_URL ||
+          "postgresql://vidhitt.s@localhost:5432/omniscript",
       });
       const adapter = new PrismaPg(pool);
       Database.instance = new PrismaClient({ adapter });

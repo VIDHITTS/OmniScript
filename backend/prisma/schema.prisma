@@ -108,6 +108,11 @@ enum AuditAction {
   PERMISSION_CHANGE
 }
 
+enum StorageBackend {
+  GRIDFS
+  S3
+}
+
 // ===== CORE IDENTITY & ACCESS =====
 
 model User {
@@ -196,6 +201,7 @@ model Document {
   title            String
   originalFilename String
   storageUrl       String? // S3 or MinIO URL
+  storageBackend   StorageBackend @default(GRIDFS)
   mimeType         String?
   fileSizeBytes    BigInt?
   sourceType       SourceType
@@ -212,18 +218,36 @@ model Document {
   workspace  Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   uploadedBy User            @relation(fields: [uploadedById], references: [id])
   chunks     DocumentChunk[]
+  structures DocumentStructure[]
+}
+
+model DocumentStructure {
+  id          String   @id @default(uuid())
+  documentId  String
+  parentId    String?
+  title       String
+  level       Int      // 1=H1, 2=H2, etc.
+  pageRange   Json?    // { start: 1, end: 5 }
+  sequence    Int      // ordering within parent
+  createdAt   DateTime @default(now())
+
+  document    Document            @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  parent      DocumentStructure?  @relation("StructureHierarchy", fields: [parentId], references: [id])
+  children    DocumentStructure[] @relation("StructureHierarchy")
 }
 
 model DocumentChunk {
   id             String   @id @default(uuid())
   documentId     String
   content        String   @db.Text
+  contextualizedContent String? @db.Text
   embedding      Json? // Represents vector (dim 1536 OpenAI) - MySQL substitute
   chunkIndex     Int
   tokenCount     Int
   sectionHeading String?
   location       Json? // page_num, start_time, end_time, line_range
   searchVector   String?  @db.Text // BM25 full-text index substitute
+  rerankScore    Float?
   createdAt      DateTime @default(now())
 
   document       Document        @relation(fields: [documentId], references: [id], onDelete: Cascade)
@@ -312,7 +336,7 @@ model Message {
   createdAt          DateTime    @default(now())
 
   session     ChatSession       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  user        User?             @relation("UserFeedback", fields: [userId], references: [id])
+  user        User?             @relation("UserFeedback", fields: [userId], references: [id], onDelete: Cascade)
   feedbacks   MessageFeedback[]
   annotations Annotation[]
 }
