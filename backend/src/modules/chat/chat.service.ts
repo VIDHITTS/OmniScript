@@ -1,5 +1,5 @@
 import { prisma } from '../../config/db';
-import { groqClient } from '../../lib/groq';
+import { groq } from '../../lib/groq';
 import { Embedder } from '../../lib/embedder';
 import { env } from '../../config/env';
 import { AppError } from '../../utils/AppError';
@@ -86,7 +86,6 @@ export class ChatService {
         citations: true,
         tokenUsage: true,
         confidenceScore: true,
-        retrievalStrategy: true,
         isBookmarked: true,
         createdAt: true,
       },
@@ -150,7 +149,6 @@ export class ChatService {
         content: answer,
         citations: JSON.parse(JSON.stringify(citations)),
         tokenUsage,
-        retrievalStrategy: 'FAST',
       },
     });
 
@@ -220,8 +218,8 @@ export class ChatService {
       ];
 
       // Stream from Groq
-      const stream = await groqClient.chat.completions.create({
-        model: env.LLM_MODEL,
+      const stream = await groq.chat.completions.create({
+        model: "llama3-8b-8192",
         messages,
         max_tokens: 2000,
         temperature: 0.7,
@@ -265,7 +263,6 @@ export class ChatService {
           content: fullResponse,
           citations: JSON.parse(JSON.stringify(citations)),
           tokenUsage: totalTokens,
-          retrievalStrategy: 'FAST',
         },
       });
 
@@ -379,8 +376,8 @@ export class ChatService {
       { role: 'user', content: query },
     ];
 
-    const response = await groqClient.chat.completions.create({
-      model: env.LLM_MODEL,
+    const response = await groq.chat.completions.create({
+      model: "llama3-8b-8192",
       messages,
       max_tokens: 2000,
       temperature: 0.7,

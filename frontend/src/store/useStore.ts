@@ -1,5 +1,5 @@
-import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
 
 interface GuestState {
   guestWorkspaceId: string | null;
@@ -21,7 +21,7 @@ export const useStore = create<GuestState>()(
       isAuthenticated: false,
       createGuestWorkspace: (name) =>
         set({
-          guestWorkspaceId: 'mock-ws-' + Date.now().toString(),
+          guestWorkspaceId: "mock-ws-" + Date.now().toString(),
           guestWorkspaceName: name,
         }),
       uploadGuestDocument: (title) =>
@@ -38,7 +38,7 @@ export const useStore = create<GuestState>()(
         }),
     }),
     {
-      name: 'omniscript-storage',
-    }
-  )
+      name: "omniscript-storage",
+    },
+  ),
 );

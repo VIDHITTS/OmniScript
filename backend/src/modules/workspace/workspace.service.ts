@@ -1,11 +1,16 @@
-import { prisma } from '../../config/db';
-import { WorkspaceRole } from '@prisma/client';
+import { prisma } from "../../config/db";
+import { WorkspaceRole } from "@prisma/client";
 
 export class WorkspaceService {
   /**
    * Create a new workspace and assign the creator as the OWNER.
    */
-  public async createWorkspace(userId: string, name: string, description?: string, template: any = 'CUSTOM') {
+  public async createWorkspace(
+    userId: string,
+    name: string,
+    description?: string,
+    template: any = "CUSTOM",
+  ) {
     const newWorkspace = await prisma.workspace.create({
       data: {
         name,
@@ -44,7 +49,7 @@ export class WorkspaceService {
           select: { fullName: true, email: true },
         },
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { createdAt: "desc" },
     });
 
     return workspaces;
@@ -53,7 +58,11 @@ export class WorkspaceService {
   /**
    * Update an existing workspace
    */
-  public async updateWorkspace(workspaceId: string, name: string, description?: string) {
+  public async updateWorkspace(
+    workspaceId: string,
+    name: string,
+    description?: string,
+  ) {
     const updated = await prisma.workspace.update({
       where: { id: workspaceId },
       data: { name, description },

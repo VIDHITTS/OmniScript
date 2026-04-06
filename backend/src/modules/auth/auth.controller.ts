@@ -1,5 +1,7 @@
-import { Request, Response } from "express";
+import { Request, Response, NextFunction } from "express";
 import { AuthService } from "./auth.service";
+import { registerSchema, loginSchema } from "./auth.validation";
+import { env } from "../../config/env";
 
 export class AuthController {
   private authService: AuthService;
@@ -12,53 +14,32 @@ export class AuthController {
    * Post /api/auth/register
    * Creates a user and sets a secure JWT cookie.
    */
-  public register = async (req: Request, res: Response): Promise<void> => {
+  public register = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
     try {
-      const { email, password, fullName } = req.body;
-
-      // Validate inputs
-      if (!email || !password || !fullName) {
-        res
-          .status(400)
-          .json({
-            message:
-              "Missing required fields: email, password, and fullName are required.",
-          });
-        return;
-      }
+      const { email, password, fullName } = registerSchema.parse(req.body);
 
       // Execute business logic via service
-      const { user, token } = await this.authService.registerUser(
-        email,
-        password,
-        fullName,
-      );
+      const { user, accessToken, refreshToken } =
+        await this.authService.registerUser(email, password, fullName);
 
-      // Set JWT in HTTP-Only Cookie
-      res.cookie("jwt", token, {
-        httpOnly: true, // Prevents XSS picking up the token
-        secure: process.env.NODE_ENV === "production", // Requires HTTPS in production
-        sameSite: "strict", // Protects against CSRF
+      res.cookie("refreshToken", refreshToken, {
+        httpOnly: true,
+        secure: env.NODE_ENV === "production",
+        sameSite: "strict",
         maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in milliseconds
       });
 
-      // Respond to client (excluding the password hash)
       res.status(201).json({
         message: "User registered successfully",
-        user: {
-          id: user.id,
-          email: user.email,
-          fullName: user.fullName,
-        },
+        user,
+        accessToken,
       });
-    } catch (error: any) {
-      if (error.message === "User already exists with this email.") {
-        res.status(409).json({ message: error.message });
-      } else {
-        res
-          .status(500)
-          .json({ message: "Internal server error", error: error.message });
-      }
+    } catch (error) {
+      next(error);
     }
   };
 
@@ -66,42 +47,60 @@ export class AuthController {
    * Post /api/auth/login
    * Authenticates a user and sets a secure JWT cookie.
    */
-  public login = async (req: Request, res: Response): Promise<void> => {
+  public login = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
     try {
-      const { email, password } = req.body;
+      const { email, password } = loginSchema.parse(req.body);
 
-      // Validate inputs
-      if (!email || !password) {
-        res.status(400).json({ message: "Missing required fields: email and password are required." });
+      // Execute login logic via service
+      const { user, accessToken, refreshToken } =
+        await this.authService.loginUser(email, password);
+
+      res.cookie("refreshToken", refreshToken, {
+        httpOnly: true,
+        secure: env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in milliseconds
+      });
+
+      res.status(200).json({
+        message: "Login successful",
+        user,
+        accessToken,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  public refresh = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
+    try {
+      const oldRefreshToken = req.cookies?.refreshToken;
+      if (!oldRefreshToken) {
+        res.status(401).json({ error: "No refresh token provided" });
         return;
       }
 
-      // Execute login logic via service
-      const { user, token } = await this.authService.loginUser(email, password);
+      const { accessToken, refreshToken } =
+        await this.authService.refreshUserToken(oldRefreshToken);
 
-      // Set JWT in HTTP-Only Cookie
-      res.cookie("jwt", token, {
+      res.cookie("refreshToken", refreshToken, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
+        secure: env.NODE_ENV === "production",
         sameSite: "strict",
-        maxAge: 7 * 24 * 60 * 60 * 1000, 
+        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in milliseconds
       });
 
-      // Respond to client
-      res.status(200).json({
-        message: "Login successful",
-        user: {
-          id: user.id,
-          email: user.email,
-          fullName: user.fullName,
-        },
-      });
-    } catch (error: any) {
-      if (error.message === "Invalid email or password.") {
-        res.status(401).json({ message: error.message });
-      } else {
-        res.status(500).json({ message: "Internal server error", error: error.message });
-      }
+      res.status(200).json({ accessToken });
+    } catch (error) {
+      next(error);
     }
   };
 
@@ -109,18 +108,25 @@ export class AuthController {
    * Post /api/auth/logout
    * Clears the HTTP-Only JWT cookie to sign the user out.
    */
-  public logout = async (req: Request, res: Response): Promise<void> => {
+  public logout = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
     try {
-      res.clearCookie("jwt", {
+      // Attempt to clear from redis using service if token provided? Actually we need userId, can use req.user.id if available.
+      // But for now, just clear the cookie
+
+      res.clearCookie("refreshToken", {
         httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
+        secure: env.NODE_ENV === "production",
         sameSite: "strict",
         path: "/",
       });
-      
+
       res.status(200).json({ message: "Logged out successfully" });
-    } catch (error: any) {
-      res.status(500).json({ message: "Internal server error", error: error.message });
+    } catch (error) {
+      next(error);
     }
   };
 }

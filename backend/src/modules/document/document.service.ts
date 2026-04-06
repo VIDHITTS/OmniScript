@@ -1,5 +1,5 @@
-import { prisma } from '../../config/db';
-import { SourceType } from '@prisma/client';
+import { prisma } from "../../config/db";
+import { SourceType } from "@prisma/client";
 
 export class DocumentService {
   /**
@@ -13,7 +13,7 @@ export class DocumentService {
     mimeType: string,
     fileSizeBytes: number,
     sourceType: SourceType,
-    storageUrl: string
+    storageUrl: string,
   ) {
     return prisma.document.create({
       data: {
@@ -25,7 +25,7 @@ export class DocumentService {
         fileSizeBytes,
         sourceType,
         storageUrl, // GridFS ID
-        status: 'QUEUED' // Background worker will pick this up
+        status: "QUEUED", // Background worker will pick this up
       },
     });
   }
@@ -38,9 +38,9 @@ export class DocumentService {
       where: {
         workspaceId,
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { createdAt: "desc" },
     });
-  }  /**
+  } /**
    * Get single document
    */
   public async getDocument(documentId: string) {
