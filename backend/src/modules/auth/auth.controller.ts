@@ -1,8 +1,14 @@
 import { Request, Response, NextFunction } from "express";
 import { AuthService } from "./auth.service";
-import { registerSchema, loginSchema } from "./auth.validation";
 import { env } from "../../config/env";
 
+/**
+ * AuthController — HTTP layer for authentication endpoints.
+ *
+ * Design: Controllers handle HTTP concerns only (parse request, call service,
+ * format response). All business logic lives in AuthService.
+ * Validation is handled by middleware, so req.body is already typed.
+ */
 export class AuthController {
   private authService: AuthService;
 
@@ -10,9 +16,18 @@ export class AuthController {
     this.authService = new AuthService();
   }
 
+  /** Cookie options for refresh tokens. */
+  private readonly cookieOptions = {
+    httpOnly: true,
+    secure: env.NODE_ENV === "production",
+    sameSite: "strict" as const,
+    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+    path: "/",
+  };
+
   /**
-   * Post /api/auth/register
-   * Creates a user and sets a secure JWT cookie.
+   * POST /api/auth/register
+   * Creates a user and sets a secure refresh token cookie.
    */
   public register = async (
     req: Request,
@@ -20,18 +35,12 @@ export class AuthController {
     next: NextFunction,
   ): Promise<void> => {
     try {
-      const { email, password, fullName } = registerSchema.parse(req.body);
+      const { email, password, fullName } = req.body;
 
-      // Execute business logic via service
       const { user, accessToken, refreshToken } =
         await this.authService.registerUser(email, password, fullName);
 
-      res.cookie("refreshToken", refreshToken, {
-        httpOnly: true,
-        secure: env.NODE_ENV === "production",
-        sameSite: "strict",
-        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in milliseconds
-      });
+      res.cookie("refreshToken", refreshToken, this.cookieOptions);
 
       res.status(201).json({
         message: "User registered successfully",
@@ -44,8 +53,8 @@ export class AuthController {
   };
 
   /**
-   * Post /api/auth/login
-   * Authenticates a user and sets a secure JWT cookie.
+   * POST /api/auth/login
+   * Authenticates a user and sets a secure refresh token cookie.
    */
   public login = async (
     req: Request,
@@ -53,18 +62,12 @@ export class AuthController {
     next: NextFunction,
   ): Promise<void> => {
     try {
-      const { email, password } = loginSchema.parse(req.body);
+      const { email, password } = req.body;
 
-      // Execute login logic via service
       const { user, accessToken, refreshToken } =
         await this.authService.loginUser(email, password);
 
-      res.cookie("refreshToken", refreshToken, {
-        httpOnly: true,
-        secure: env.NODE_ENV === "production",
-        sameSite: "strict",
-        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in milliseconds
-      });
+      res.cookie("refreshToken", refreshToken, this.cookieOptions);
 
       res.status(200).json({
         message: "Login successful",
@@ -76,6 +79,10 @@ export class AuthController {
     }
   };
 
+  /**
+   * POST /api/auth/refresh
+   * Rotates the refresh token and returns a new access token.
+   */
   public refresh = async (
     req: Request,
     res: Response,
@@ -84,19 +91,14 @@ export class AuthController {
     try {
       const oldRefreshToken = req.cookies?.refreshToken;
       if (!oldRefreshToken) {
-        res.status(401).json({ error: "No refresh token provided" });
+        res.status(401).json({ error: "No refresh token provided", statusCode: 401 });
         return;
       }
 
       const { accessToken, refreshToken } =
         await this.authService.refreshUserToken(oldRefreshToken);
 
-      res.cookie("refreshToken", refreshToken, {
-        httpOnly: true,
-        secure: env.NODE_ENV === "production",
-        sameSite: "strict",
-        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in milliseconds
-      });
+      res.cookie("refreshToken", refreshToken, this.cookieOptions);
 
       res.status(200).json({ accessToken });
     } catch (error) {
@@ -105,8 +107,8 @@ export class AuthController {
   };
 
   /**
-   * Post /api/auth/logout
-   * Clears the HTTP-Only JWT cookie to sign the user out.
+   * POST /api/auth/logout
+   * Invalidates the refresh token in Redis and clears the cookie.
    */
   public logout = async (
     req: Request,
@@ -114,8 +116,11 @@ export class AuthController {
     next: NextFunction,
   ): Promise<void> => {
     try {
-      // Attempt to clear from redis using service if token provided? Actually we need userId, can use req.user.id if available.
-      // But for now, just clear the cookie
+      // Use the authenticated user's ID to invalidate the Redis token
+      const userId = req.user?.userId;
+      if (userId) {
+        await this.authService.logoutUser(userId);
+      }
 
       res.clearCookie("refreshToken", {
         httpOnly: true,
