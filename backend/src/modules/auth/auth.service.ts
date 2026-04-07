@@ -1,6 +1,6 @@
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
-import { prisma } from "../../lib/prisma";
+import { prisma } from "../../config/db";
 import { env } from "../../config/env";
 import { AppError } from "../../utils/AppError";
 import { redis } from "../../lib/redis";
