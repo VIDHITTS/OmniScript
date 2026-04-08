@@ -1,9 +1,18 @@
-import { Request, Response } from "express";
+import { Request, Response, NextFunction } from "express";
 import { DocumentService } from "./document.service";
-import { SourceType } from "@prisma/client";
+import { SourceType, Status } from "@prisma/client";
 import { gridFsStorage } from "../../lib/storage/GridFsStorageService";
+import { enqueueDocumentProcessing } from "../../workers/documentProcessor";
+import { AppError } from "../../utils/AppError";
+import { logger } from "../../utils/logger";
 import streamifier from "streamifier";
 
+/**
+ * DocumentController — HTTP layer for document management.
+ *
+ * Design: Upload → store file in GridFS → save metadata in Postgres
+ * → enqueue for background processing → return immediately with status: QUEUED.
+ */
 export class DocumentController {
   private documentService: DocumentService;
 
@@ -12,30 +21,25 @@ export class DocumentController {
   }
 
   /**
-   * Post /api/workspaces/:workspaceId/documents
-   * Real upload logic streaming to MongoDB GridFS
+   * POST /api/workspaces/:workspaceId/documents
+   * Upload a file, store in GridFS, save metadata, trigger async processing.
    */
-  public upload = async (req: Request, res: Response): Promise<void> => {
+  public upload = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const userId = req.user?.userId;
       const workspaceId = req.params.workspaceId as string;
 
-      if (!userId) {
-        res.status(401).json({ message: "Unauthorized" });
-        return;
-      }
+      if (!userId) throw AppError.unauthorized();
 
       const { file } = req;
-      const { title, sourceType } = req.body;
+      const { title, sourceType, url } = req.body;
 
       if (!title || !sourceType) {
-        res.status(400).json({ message: "Missing title or sourceType." });
-        return;
+        throw AppError.badRequest("Missing title or sourceType.");
       }
 
       if (!file && sourceType !== "WEB_URL" && sourceType !== "YOUTUBE") {
-        res.status(400).json({ message: "Missing file upload." });
-        return;
+        throw AppError.badRequest("File upload required for this source type.");
       }
 
       let storageUrl = "";
@@ -43,7 +47,7 @@ export class DocumentController {
       let fileSizeBytes = 0;
       let originalFilename = "external-source";
 
-      // 1) If it's a file, Stream raw buffer to GridFS
+      // Stream file buffer to GridFS for file-based sources
       if (file) {
         const docStream = streamifier.createReadStream(file.buffer);
 
@@ -57,12 +61,11 @@ export class DocumentController {
         fileSizeBytes = file.size;
         originalFilename = file.originalname;
       } else {
-        // If it's a URL or YouTube link, use the URL itself as the "storageUrl" placeholder
-        // Background workers will scrape and save text output
-        storageUrl = req.body.url || "pending_creation";
+        // URL-based sources store the URL; workers will fetch content
+        storageUrl = url || "pending_creation";
       }
 
-      // 2) Save metadata to Postgres Db
+      // Save metadata to Postgres
       const document = await this.documentService.createDocument(
         workspaceId,
         userId,
@@ -74,81 +77,71 @@ export class DocumentController {
         storageUrl,
       );
 
-      res
-        .status(201)
-        .json({
-          message: "Document uploaded and queued for processing",
-          document,
-        });
-    } catch (error: any) {
-      console.error(error);
-      res
-        .status(500)
-        .json({ message: "Internal server error", error: error.message });
+      // Trigger async background processing
+      enqueueDocumentProcessing(document.id);
+
+      logger.info(
+        { documentId: document.id, workspaceId, sourceType },
+        "Document uploaded and queued for processing",
+      );
+
+      res.status(201).json({
+        message: "Document uploaded and queued for processing",
+        document,
+      });
+    } catch (error) {
+      next(error);
     }
   };
 
   /**
-   * Get /api/workspaces/:workspaceId/documents
+   * GET /api/workspaces/:workspaceId/documents
    */
-  public list = async (req: Request, res: Response): Promise<void> => {
+  public list = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const workspaceId = req.params.workspaceId as string;
-      const documents =
-        await this.documentService.getWorkspaceDocuments(workspaceId);
-      res.status(200).json({ documents });
-    } catch (error: any) {
-      res
-        .status(500)
-        .json({ message: "Internal server error", error: error.message });
+      const cursor = req.query.cursor as string | undefined;
+      const take = Number(req.query.take) || 20;
+      const status = req.query.status as Status | undefined;
+
+      const result = await this.documentService.getWorkspaceDocuments(
+        workspaceId,
+        { cursor, take, status },
+      );
+
+      res.status(200).json(result);
+    } catch (error) {
+      next(error);
     }
   };
 
   /**
-   * Get /api/workspaces/:workspaceId/documents/:docId
+   * GET /api/workspaces/:workspaceId/documents/:docId
    */
-  public getOne = async (req: Request, res: Response): Promise<void> => {
+  public getOne = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const docId = req.params.docId as string;
-      const document = await this.documentService.getDocument(docId);
-
-      if (!document) {
-        res.status(404).json({ message: "Document not found" });
-        return;
-      }
+      const document = await this.documentService.getDocument(req.params.docId);
       res.status(200).json({ document });
-    } catch (error: any) {
-      res
-        .status(500)
-        .json({ message: "Internal server error", error: error.message });
+    } catch (error) {
+      next(error);
     }
   };
 
   /**
-   * Get /api/workspaces/:workspaceId/documents/:docId/download
-   * Streams the actual file from GridFS directly back to the client!
+   * GET /api/workspaces/:workspaceId/documents/:docId/download
+   * Streams the actual file from GridFS back to the client.
    */
-  public download = async (req: Request, res: Response): Promise<void> => {
+  public download = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const docId = req.params.docId as string;
-      const document = await this.documentService.getDocument(docId);
+      const document = await this.documentService.getDocument(req.params.docId);
 
-      if (!document || !document.storageUrl) {
-        res.status(404).json({ message: "Document file not found" });
-        return;
+      if (!document.storageUrl) {
+        throw AppError.notFound("Document file not found.");
       }
 
-      // Ensure storage URL is actually a GridFS id hash (and not a naive youtube link)
-      if (
-        document.sourceType === "WEB_URL" ||
-        document.sourceType === "YOUTUBE"
-      ) {
-        res
-          .status(400)
-          .json({
-            message: "External sources do not have downloadable files.",
-          });
-        return;
+      // External sources don't have downloadable files
+      if (document.sourceType === "WEB_URL" || document.sourceType === "YOUTUBE") {
+        throw AppError.badRequest("External sources do not have downloadable files.");
       }
 
       res.setHeader(
@@ -162,29 +155,20 @@ export class DocumentController {
 
       const downloadStream = await gridFsStorage.download(document.storageUrl);
       downloadStream.pipe(res);
-    } catch (error: any) {
-      console.error(error);
-      res
-        .status(500)
-        .json({ message: "Failed to download file", error: error.message });
+    } catch (error) {
+      next(error);
     }
   };
 
   /**
-   * Delete /api/workspaces/:workspaceId/documents/:docId
-   * Completely removes Postgres row + raw GridFS binary chunk from DB
+   * DELETE /api/workspaces/:workspaceId/documents/:docId
+   * Removes both the GridFS binary and the Postgres metadata.
    */
-  public delete = async (req: Request, res: Response): Promise<void> => {
+  public delete = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const docId = req.params.docId as string;
+      const doc = await this.documentService.getDocument(req.params.docId);
 
-      const doc = await this.documentService.getDocument(docId);
-      if (!doc) {
-        res.status(404).json({ message: "Document not found" });
-        return;
-      }
-
-      // Delete from storage first!
+      // Delete from storage first
       if (
         doc.storageUrl &&
         doc.sourceType !== "WEB_URL" &&
@@ -193,20 +177,19 @@ export class DocumentController {
         try {
           await gridFsStorage.delete(doc.storageUrl);
         } catch (e) {
-          console.warn(
-            `GridFS binary missing or could not be deleted for docId: ${docId}`,
+          logger.warn(
+            { documentId: doc.id, err: e },
+            "GridFS binary could not be deleted (may already be removed)",
           );
         }
       }
 
-      // Delete cascade relations from DB
-      await this.documentService.deleteDocument(docId);
+      // Delete from database (cascade deletes chunks + structures)
+      await this.documentService.deleteDocument(doc.id);
 
       res.status(200).json({ message: "Document deleted successfully" });
-    } catch (error: any) {
-      res
-        .status(500)
-        .json({ message: "Internal server error", error: error.message });
+    } catch (error) {
+      next(error);
     }
   };
 }
