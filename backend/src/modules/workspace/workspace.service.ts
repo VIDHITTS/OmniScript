@@ -113,7 +113,7 @@ export class WorkspaceService {
         ...(input.description !== undefined && { description: input.description }),
         ...(input.icon !== undefined && { icon: input.icon }),
         ...(input.isPublic !== undefined && { isPublic: input.isPublic }),
-        ...(input.settings !== undefined && { settings: input.settings }),
+        ...(input.settings !== undefined && { settings: JSON.parse(JSON.stringify(input.settings)) }),
       },
     });
     return updated;

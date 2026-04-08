@@ -4,6 +4,7 @@ import { gridFsStorage } from '../lib/storage/GridFsStorageService';
 import { TextExtractor, streamToBuffer } from '../lib/textExtractor';
 import { SemanticChunker } from '../lib/chunker';
 import { Embedder, enrichChunkContext } from '../lib/embedder';
+import { StructureExtractor } from '../lib/structureExtractor';
 import { logger } from '../utils/logger';
 
 /**
@@ -23,6 +24,7 @@ const MAX_RETRIES = 3;
 const textExtractor = new TextExtractor();
 const chunker = new SemanticChunker(500, 50);
 const embedder = new Embedder();
+const structureExtractor = new StructureExtractor();
 
 // Simple in-memory processing queue
 const processingQueue: string[] = [];
@@ -113,7 +115,14 @@ async function processDocument(documentId: string, retryCount = 0): Promise<void
       return;
     }
 
-    // 5. Update status → CHUNKING
+    // 5. Extract document structure (for PageIndex navigation)
+    try {
+      await structureExtractor.extractAndStore(documentId, text, metadata);
+    } catch (structErr) {
+      logger.warn({ documentId, error: structErr }, 'Structure extraction failed, continuing with chunking');
+    }
+
+    // 6. Update status → CHUNKING
     await updateStatus(documentId, Status.CHUNKING);
 
     // 6. Semantic chunking
