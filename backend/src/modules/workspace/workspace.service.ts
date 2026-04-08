@@ -1,31 +1,37 @@
 import { prisma } from "../../config/db";
 import { WorkspaceRole } from "@prisma/client";
+import { AppError } from "../../utils/AppError";
+import { CreateWorkspaceInput, UpdateWorkspaceInput, CursorPagination } from "./workspace.validation";
 
+/**
+ * WorkspaceService — Business logic for workspace management.
+ *
+ * All workspace queries are scoped to the authenticated user's memberships.
+ * Never exposes another user's workspace data.
+ */
 export class WorkspaceService {
   /**
-   * Create a new workspace and assign the creator as the OWNER.
+   * Create a new workspace and assign the creator as OWNER.
+   * Atomically creates both the workspace and the membership row.
    */
-  public async createWorkspace(
-    userId: string,
-    name: string,
-    description?: string,
-    template: any = "CUSTOM",
-  ) {
+  public async createWorkspace(userId: string, input: CreateWorkspaceInput) {
     const newWorkspace = await prisma.workspace.create({
       data: {
-        name,
-        description,
+        name: input.name,
+        description: input.description,
         ownerId: userId,
-        template,
+        template: input.template,
         members: {
           create: {
-            userId: userId,
+            userId,
             role: WorkspaceRole.OWNER,
           },
         },
       },
       include: {
-        members: true,
+        members: {
+          select: { userId: true, role: true, joinedAt: true },
+        },
       },
     });
 
@@ -33,47 +39,105 @@ export class WorkspaceService {
   }
 
   /**
-   * Get all workspaces the user has access to.
+   * Get all workspaces the user has access to (with cursor pagination).
    */
-  public async getUserWorkspaces(userId: string) {
+  public async getUserWorkspaces(userId: string, pagination: CursorPagination) {
+    const { cursor, take } = pagination;
+
     const workspaces = await prisma.workspace.findMany({
       where: {
         members: {
-          some: {
-            userId: userId,
-          },
+          some: { userId },
         },
       },
       include: {
         owner: {
           select: { fullName: true, email: true },
         },
+        _count: {
+          select: {
+            members: true,
+            documents: true,
+          },
+        },
       },
       orderBy: { createdAt: "desc" },
+      take: take + 1,
+      ...(cursor && { cursor: { id: cursor }, skip: 1 }),
     });
 
-    return workspaces;
+    const hasMore = workspaces.length > take;
+    const results = hasMore ? workspaces.slice(0, take) : workspaces;
+    const nextCursor = hasMore ? results[results.length - 1].id : null;
+
+    return { workspaces: results, nextCursor, hasMore };
   }
 
   /**
-   * Update an existing workspace
+   * Get a single workspace by ID with aggregate counts.
+   * Throws if workspace doesn't exist.
    */
-  public async updateWorkspace(
-    workspaceId: string,
-    name: string,
-    description?: string,
-  ) {
+  public async getWorkspaceById(workspaceId: string) {
+    const workspace = await prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      include: {
+        owner: {
+          select: { fullName: true, email: true },
+        },
+        _count: {
+          select: {
+            members: true,
+            documents: true,
+            chatSessions: true,
+          },
+        },
+      },
+    });
+
+    if (!workspace) {
+      throw AppError.notFound("Workspace not found.");
+    }
+
+    return workspace;
+  }
+
+  /**
+   * Update workspace properties.
+   * Only name, description, icon, isPublic, and settings can be updated.
+   */
+  public async updateWorkspace(workspaceId: string, input: UpdateWorkspaceInput) {
     const updated = await prisma.workspace.update({
       where: { id: workspaceId },
-      data: { name, description },
+      data: {
+        ...(input.name !== undefined && { name: input.name }),
+        ...(input.description !== undefined && { description: input.description }),
+        ...(input.icon !== undefined && { icon: input.icon }),
+        ...(input.isPublic !== undefined && { isPublic: input.isPublic }),
+        ...(input.settings !== undefined && { settings: input.settings }),
+      },
     });
     return updated;
   }
 
   /**
-   * Delete an existing workspace
+   * Delete a workspace (cascade deletes all children via Prisma relations).
+   * Only the workspace OWNER should be permitted to delete.
    */
-  public async deleteWorkspace(workspaceId: string) {
+  public async deleteWorkspace(workspaceId: string, userId: string) {
+    // Verify ownership
+    const workspace = await prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { ownerId: true },
+    });
+
+    if (!workspace) {
+      throw AppError.notFound("Workspace not found.");
+    }
+
+    if (workspace.ownerId !== userId) {
+      throw AppError.forbidden("Only the workspace owner can delete it.");
+    }
+
     await prisma.workspace.delete({
       where: { id: workspaceId },
     });

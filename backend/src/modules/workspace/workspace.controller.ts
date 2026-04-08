@@ -1,6 +1,13 @@
-import { Request, Response } from "express";
+import { Request, Response, NextFunction } from "express";
 import { WorkspaceService } from "./workspace.service";
+import { AppError } from "../../utils/AppError";
 
+/**
+ * WorkspaceController — HTTP layer for workspace operations.
+ *
+ * All methods delegate to WorkspaceService for business logic.
+ * Errors are forwarded to the global error handler via next().
+ */
 export class WorkspaceController {
   private workspaceService: WorkspaceService;
 
@@ -9,109 +16,84 @@ export class WorkspaceController {
   }
 
   /**
-   * Post /api/workspaces
-   * Create a new workspace.
+   * POST /api/workspaces
    */
-  public create = async (req: Request, res: Response): Promise<void> => {
+  public create = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const userId = req.user?.userId;
-      if (!userId) {
-        res.status(401).json({ message: "Unauthorized" });
-        return;
-      }
+      if (!userId) throw AppError.unauthorized();
 
-      const { name, description, template } = req.body;
-
-      if (!name) {
-        res.status(400).json({ message: "Workspace name is required." });
-        return;
-      }
-
-      const workspace = await this.workspaceService.createWorkspace(
-        userId,
-        name,
-        description,
-        template,
-      );
+      const workspace = await this.workspaceService.createWorkspace(userId, req.body);
 
       res.status(201).json({
         message: "Workspace created successfully",
         workspace,
       });
-    } catch (error: any) {
-      res
-        .status(500)
-        .json({ message: "Internal server error", error: error.message });
+    } catch (error) {
+      next(error);
     }
   };
 
   /**
-   * Get /api/workspaces
-   * Get all workspaces for the authenticated user.
+   * GET /api/workspaces
    */
-  public getAll = async (req: Request, res: Response): Promise<void> => {
+  public getAll = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const userId = req.user?.userId;
-      if (!userId) {
-        res.status(401).json({ message: "Unauthorized" });
-        return;
-      }
+      if (!userId) throw AppError.unauthorized();
 
-      const workspaces = await this.workspaceService.getUserWorkspaces(userId);
+      const pagination = {
+        cursor: req.query.cursor as string | undefined,
+        take: Number(req.query.take) || 20,
+      };
 
-      res.status(200).json({
-        workspaces,
-      });
-    } catch (error: any) {
-      res
-        .status(500)
-        .json({ message: "Internal server error", error: error.message });
+      const result = await this.workspaceService.getUserWorkspaces(userId, pagination);
+
+      res.status(200).json(result);
+    } catch (error) {
+      next(error);
     }
   };
 
   /**
-   * Put /api/workspaces/:id
-   * Update a workspace.
+   * GET /api/workspaces/:id
    */
-  public update = async (req: Request, res: Response): Promise<void> => {
+  public getOne = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const id = req.params.id as string;
-      const { name, description } = req.body;
+      const workspace = await this.workspaceService.getWorkspaceById(req.params.id);
+      res.status(200).json({ workspace });
+    } catch (error) {
+      next(error);
+    }
+  };
 
-      if (!name) {
-        res.status(400).json({ message: "Workspace name is required." });
-        return;
-      }
-
+  /**
+   * PATCH /api/workspaces/:id
+   */
+  public update = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
       const updatedWorkspace = await this.workspaceService.updateWorkspace(
-        id,
-        name,
-        description,
+        req.params.id,
+        req.body,
       );
-      res
-        .status(200)
-        .json({ message: "Workspace updated", workspace: updatedWorkspace });
-    } catch (error: any) {
-      res
-        .status(500)
-        .json({ message: "Internal server error", error: error.message });
+      res.status(200).json({ message: "Workspace updated", workspace: updatedWorkspace });
+    } catch (error) {
+      next(error);
     }
   };
 
   /**
-   * Delete /api/workspaces/:id
-   * Delete a workspace.
+   * DELETE /api/workspaces/:id
    */
-  public delete = async (req: Request, res: Response): Promise<void> => {
+  public delete = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const id = req.params.id as string;
+      const userId = req.user?.userId;
+      if (!userId) throw AppError.unauthorized();
 
-      await this.workspaceService.deleteWorkspace(id);
+      await this.workspaceService.deleteWorkspace(req.params.id, userId);
       res.status(200).json({ message: "Workspace deleted successfully" });
-    } catch (error: any) {
-      res
-        .status(500)
-        .json({ message: "Internal server error", error: error.message });
+    } catch (error) {
+      next(error);
     }
   };
 }
