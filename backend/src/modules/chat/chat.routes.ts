@@ -1,20 +1,25 @@
-import { Router } from 'express';
-import { ChatController } from './chat.controller';
-import { authenticateToken } from '../../middleware/auth.middleware';
+import { Router } from "express";
+import { ChatController } from "./chat.controller";
+import { validate } from "../../middleware/validate.middleware";
+import { createSessionSchema, sendMessageSchema, branchSessionSchema } from "./chat.validation";
 
+/**
+ * Chat routes — mounted under /api/workspaces/:workspaceId/chat
+ * Authentication and workspace access are handled by parent router.
+ */
 const router = Router({ mergeParams: true });
 const chatController = new ChatController();
 
-// All chat routes require authentication
-router.use(authenticateToken);
+// Session CRUD
+router.post("/sessions", validate(createSessionSchema), chatController.createSession);
+router.get("/sessions", chatController.getSessions);
 
-// Workspace-scoped session routes (mounted under /api/workspaces/:workspaceId/chat)
-router.post('/sessions', chatController.createSession);
-router.get('/sessions', chatController.getSessions);
+// Message operations
+router.get("/sessions/:sessionId/messages", chatController.getMessages);
+router.post("/sessions/:sessionId/messages", validate(sendMessageSchema), chatController.sendMessage);
+router.post("/sessions/:sessionId/stream", chatController.streamMessage);
 
-// Session-scoped message routes
-router.get('/sessions/:sessionId/messages', chatController.getMessages);
-router.post('/sessions/:sessionId/messages', chatController.sendMessage);
-router.post('/sessions/:sessionId/messages/stream', chatController.streamMessage);
+// Conversation branching
+router.post("/sessions/:sessionId/branch", validate(branchSessionSchema), chatController.branchSession);
 
 export default router;

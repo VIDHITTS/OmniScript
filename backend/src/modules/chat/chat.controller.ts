@@ -1,17 +1,14 @@
-import { Request, Response, NextFunction } from 'express';
-import { ChatService } from './chat.service';
-import {
-  createSessionSchema,
-  sendMessageSchema,
-  sessionIdSchema,
-  messageListSchema,
-} from './chat.validation';
-import { AppError } from '../../utils/AppError';
+import { Request, Response, NextFunction } from "express";
+import { ChatService } from "./chat.service";
+import { AppError } from "../../utils/AppError";
 
 /**
- * ChatController — HTTP layer for chat sessions and AI responses.
+ * ChatController — HTTP layer for chat sessions and AI messages.
  *
- * Supports both standard JSON responses and SSE streaming.
+ * Supports:
+ * - Standard request/response for session CRUD
+ * - SSE (Server-Sent Events) streaming for real-time AI responses
+ * - Conversation branching at any message point
  */
 export class ChatController {
   private chatService: ChatService;
@@ -29,10 +26,9 @@ export class ChatController {
       if (!userId) throw AppError.unauthorized();
 
       const workspaceId = req.params.workspaceId as string;
-      const input = createSessionSchema.parse(req.body);
-      const session = await this.chatService.createSession(userId, workspaceId, input);
+      const session = await this.chatService.createSession(userId, workspaceId, req.body);
 
-      res.status(201).json({ message: 'Chat session created', session });
+      res.status(201).json({ message: "Chat session created", session });
     } catch (error) {
       next(error);
     }
@@ -56,14 +52,15 @@ export class ChatController {
   };
 
   /**
-   * GET /api/chat/sessions/:sessionId/messages
+   * GET /api/workspaces/:workspaceId/chat/sessions/:sessionId/messages
    */
   public getMessages = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { sessionId } = sessionIdSchema.parse(req.params);
-      const pagination = messageListSchema.parse(req.query);
-      const result = await this.chatService.getMessages(sessionId, pagination);
+      const { sessionId } = req.params;
+      const cursor = req.query.cursor as string | undefined;
+      const take = Number(req.query.take) || 50;
 
+      const result = await this.chatService.getMessages(sessionId, { cursor, take });
       res.status(200).json(result);
     } catch (error) {
       next(error);
@@ -71,61 +68,90 @@ export class ChatController {
   };
 
   /**
-   * POST /api/chat/sessions/:sessionId/messages
-   * Standard JSON response (non-streaming).
+   * POST /api/workspaces/:workspaceId/chat/sessions/:sessionId/messages
+   * Standard (non-streaming) message send.
    */
   public sendMessage = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const userId = req.user?.userId;
       if (!userId) throw AppError.unauthorized();
 
-      const { sessionId } = sessionIdSchema.parse(req.params);
-      const { content } = sendMessageSchema.parse(req.body);
-      const result = await this.chatService.sendMessage(userId, sessionId, content);
+      const { sessionId } = req.params;
+      const { content } = req.body;
 
-      res.status(200).json(result);
+      const result = await this.chatService.sendMessage(userId, sessionId, content);
+      res.status(201).json(result);
     } catch (error) {
       next(error);
     }
   };
 
   /**
-   * POST /api/chat/sessions/:sessionId/messages/stream
-   * SSE streaming response.
+   * POST /api/workspaces/:workspaceId/chat/sessions/:sessionId/stream
+   * SSE-based streaming message response.
    */
   public streamMessage = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const userId = req.user?.userId;
       if (!userId) throw AppError.unauthorized();
 
-      const { sessionId } = sessionIdSchema.parse(req.params);
-      const { content } = sendMessageSchema.parse(req.body);
+      const { sessionId } = req.params;
+      const { content } = req.body;
 
-      // Set up SSE headers
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-      res.flushHeaders();
+      if (!content) {
+        throw AppError.badRequest("Message content is required.");
+      }
+
+      // SSE headers
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
+      });
 
       await this.chatService.streamMessage(
         userId,
         sessionId,
         content,
-        // onChunk — stream each token to client
+        // onChunk: send each token
         (chunk: string) => {
-          res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk })}\n\n`);
+          res.write(`data: ${JSON.stringify({ type: "token", content: chunk })}\n\n`);
         },
-        // onDone — signal completion with metadata
+        // onDone: send final metadata
         (message) => {
-          res.write(`data: ${JSON.stringify({ type: 'done', ...message })}\n\n`);
+          res.write(`data: ${JSON.stringify({ type: "done", ...message })}\n\n`);
           res.end();
         },
-        // onError — signal error
+        // onError: send error and close
         (error: Error) => {
-          res.write(`data: ${JSON.stringify({ type: 'error', error: error.message })}\n\n`);
+          res.write(`data: ${JSON.stringify({ type: "error", error: error.message })}\n\n`);
           res.end();
-        }
+        },
       );
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  /**
+   * POST /api/workspaces/:workspaceId/chat/sessions/:sessionId/branch
+   * Branch a conversation at a specific message.
+   */
+  public branchSession = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const userId = req.user?.userId;
+      if (!userId) throw AppError.unauthorized();
+
+      const { sessionId } = req.params;
+      const { messageId } = req.body;
+
+      if (!messageId) {
+        throw AppError.badRequest("messageId is required to branch.");
+      }
+
+      const newSession = await this.chatService.branchSession(userId, sessionId, messageId);
+      res.status(201).json({ message: "Session branched", session: newSession });
     } catch (error) {
       next(error);
     }
