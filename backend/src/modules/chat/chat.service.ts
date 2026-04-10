@@ -2,40 +2,39 @@ import { prisma } from '../../config/db';
 import { groq } from '../../lib/groq';
 import { HybridRetriever } from '../../lib/retrieval';
 import { CrossEncoderReranker } from '../../lib/reranker';
+import { Agent } from '../../agent/agent';
+import { QueryRouter } from '../../agent/query-router';
 import { AppError } from '../../utils/AppError';
 import { logger } from '../../utils/logger';
 import { RetrievedChunk, Citation } from '../../types';
 import { CreateSessionInput, MessageListInput } from './chat.validation';
 
 /**
- * ChatService — Business logic for chat sessions and AI-powered retrieval.
+ * ChatService — Business logic for chat sessions and AI-powered interaction.
  *
- * Retrieval Pipeline:
- * 1. Hybrid Search (vector + BM25 + RRF) → top 50
- * 2. Cross-Encoder Reranking (Cohere) → top 5
- * 3. Feed top 5 chunks as context → LLM generates answer with citations
- * 4. Stream response via SSE
- *
- * Design decisions:
- * - Stores citations as JSONB array on the message
- * - Includes previous messages as conversation context (last 10)
- * - System prompt instructs LLM to cite sources using [1], [2]
- * - Tracks token_usage for cost monitoring
+ * Routing Pipeline:
+ * 1. QueryRouter classifies query (FAST | AGENTIC | PAGEINDEX)
+ * 2. FAST path: Hybrid Search (vector + BM25 + RRF) → Cohere Reranking → LLM Generation
+ * 3. AGENTIC / PAGEINDEX path: Delegates to Agent orchestrator (Plan → Execute Tools → Evaluate CRAG → Synthesize)
+ * 4. Responses are stored in PG with tool calls and citations attached.
  */
 export class ChatService {
   private retriever: HybridRetriever;
   private reranker: CrossEncoderReranker;
+  private queryRouter: QueryRouter;
+  private agent: Agent;
 
   constructor() {
     this.retriever = new HybridRetriever();
     this.reranker = new CrossEncoderReranker();
+    this.queryRouter = new QueryRouter();
+    this.agent = new Agent();
   }
 
   /**
    * Create a new chat session in a workspace.
    */
   public async createSession(userId: string, workspaceId: string, input: CreateSessionInput) {
-    // Verify workspace membership
     const member = await prisma.workspaceMember.findFirst({
       where: { workspaceId, userId },
     });
@@ -87,6 +86,7 @@ export class ChatService {
         role: true,
         content: true,
         citations: true,
+        toolCalls: true,
         suggestedFollowups: true,
         tokenUsage: true,
         confidenceScore: true,
@@ -104,51 +104,80 @@ export class ChatService {
 
   /**
    * Send a message and get AI response (non-streaming).
-   * Uses hybrid retrieval + Cohere reranking.
    */
   public async sendMessage(userId: string, sessionId: string, content: string) {
     const session = await this.getSessionOrThrow(sessionId);
+
+    // Filter to ensure only workspace members can send messages
+    const isMember = await prisma.workspaceMember.findFirst({
+      where: { workspaceId: session.workspaceId, userId },
+    });
+    if (!isMember) throw AppError.forbidden('You do not have access to this workspace.');
 
     // Store user message
     const userMessage = await prisma.message.create({
       data: { sessionId, userId, role: 'USER', content },
     });
 
-    // Retrieve relevant chunks: hybrid search + reranking
-    const rawChunks = await this.retriever.retrieve(session.workspaceId, content, 50);
-    const chunks = await this.reranker.rerank(content, rawChunks, 5);
-
-    // Build conversation context (last 10 messages)
     const previousMessages = await this.getPreviousMessages(sessionId);
+    
+    // Check if workspace has documents
+    const docCount = await prisma.document.count({
+      where: { workspaceId: session.workspaceId, status: 'INDEXED' }
+    });
+    
+    // Route Query
+    const routeDecision = await this.queryRouter.route(content, docCount > 0);
+    logger.info({ routeDecision }, 'Query routed');
 
-    // Generate AI response with citations
-    const { answer, citations, tokenUsage } = await this.generateAnswer(
-      content, chunks, previousMessages,
-    );
+    let answer: string;
+    let citations: Citation[] = [];
+    let tokenUsage = 0;
+    let toolCalls: Record<string, unknown>[] | undefined;
 
-    // Store AI response
+    if (routeDecision.queryType === 'FAST' && docCount > 0) {
+      // FAST Path: Hybrid Search + Reranker + LLM
+      const rawChunks = await this.retriever.retrieve(session.workspaceId, content, 50);
+      const chunks = await this.reranker.rerank(content, rawChunks, 5);
+      
+      const generationResult = await this.generateAnswer(content, chunks, previousMessages);
+      answer = generationResult.answer;
+      citations = generationResult.citations;
+      tokenUsage = generationResult.tokenUsage;
+      
+    } else if (docCount > 0) {
+      // AGENTIC Path: Orchestrate Tools
+      const agentResult = await this.agent.run(
+        content,
+        { workspaceId: session.workspaceId },
+        previousMessages
+      );
+      answer = agentResult.answer;
+      citations = agentResult.citations;
+      tokenUsage = agentResult.tokenUsage;
+      toolCalls = agentResult.toolCalls;
+    } else {
+      // Empty Workspace
+      answer = "The workspace is empty. Please upload some documents first so I can answer your questions based on them.";
+    }
+
     const aiMessage = await prisma.message.create({
       data: {
         sessionId,
         role: 'ASSISTANT',
         content: answer,
-        citations: JSON.parse(JSON.stringify(citations)),
+        citations: citations.length > 0 ? JSON.parse(JSON.stringify(citations)) : undefined,
+        toolCalls: toolCalls && toolCalls.length > 0 ? JSON.parse(JSON.stringify(toolCalls)) : undefined,
         tokenUsage,
       },
     });
 
-    // Update session lastActiveAt
     await prisma.chatSession.update({
       where: { id: sessionId },
       data: { lastActiveAt: new Date() },
     });
 
-    logger.info(
-      { sessionId, chunksRetrieved: rawChunks.length, chunksAfterRerank: chunks.length, tokenUsage },
-      'AI response generated',
-    );
-
-    return { userMessage, aiMessage };
+    return { userMessage, aiMessage, routing: routeDecision };
   }
 
   /**
@@ -159,71 +188,85 @@ export class ChatService {
     sessionId: string,
     content: string,
     onChunk: (chunk: string) => void,
-    onDone: (message: { id: string; citations: unknown; suggestedFollowups?: unknown }) => void,
+    onDone: (message: { id: string; citations: unknown; toolCalls: unknown; suggestedFollowups?: unknown; routing: unknown }) => void,
     onError: (error: Error) => void,
   ): Promise<void> {
     try {
       const session = await this.getSessionOrThrow(sessionId);
 
-      // Store user message
       await prisma.message.create({
         data: { sessionId, userId, role: 'USER', content },
       });
 
-      // Retrieve relevant chunks: hybrid search + reranking
-      const rawChunks = await this.retriever.retrieve(session.workspaceId, content, 50);
-      const chunks = await this.reranker.rerank(content, rawChunks, 5);
-
-      // Build context
       const previousMessages = await this.getPreviousMessages(sessionId);
-
-      // Build prompt
-      const contextText = this.buildContextText(chunks);
-      const systemPrompt = this.buildSystemPrompt(contextText);
-      const messages = this.buildLLMMessages(systemPrompt, previousMessages, content);
-
-      // Stream from Groq
-      const stream = await groq.chat.completions.create({
-        model: "llama-3.3-70b-versatile",
-        messages,
-        max_tokens: 2000,
-        temperature: 0.7,
-        stream: true,
+      
+      const docCount = await prisma.document.count({
+        where: { workspaceId: session.workspaceId, status: 'INDEXED' }
       });
-
-      let fullResponse = '';
+      
+      const routeDecision = await this.queryRouter.route(content, docCount > 0);
+      
+      let finalAnswer = '';
+      let citations: Citation[] = [];
       let totalTokens = 0;
+      let toolCalls: Record<string, unknown>[] | undefined;
 
-      for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta?.content || '';
-        if (delta) {
-          fullResponse += delta;
-          onChunk(delta);
-        }
-        // Groq may include x_groq usage in the final chunk
-        const chunkAny = chunk as unknown as Record<string, unknown>;
-        if (chunkAny.x_groq && typeof chunkAny.x_groq === 'object') {
-          const xGroq = chunkAny.x_groq as Record<string, unknown>;
-          if (xGroq.usage && typeof xGroq.usage === 'object') {
-            const usage = xGroq.usage as Record<string, number>;
-            totalTokens = usage.total_tokens || 0;
+      if (routeDecision.queryType === 'FAST' && docCount > 0) {
+        // FAST Path Stream
+        const rawChunks = await this.retriever.retrieve(session.workspaceId, content, 50);
+        const chunks = await this.reranker.rerank(content, rawChunks, 5);
+        citations = this.buildCitations(chunks);
+        
+        const contextText = this.buildContextText(chunks);
+        const systemPrompt = this.buildSystemPrompt(contextText);
+        const messages = this.buildLLMMessages(systemPrompt, previousMessages, content);
+
+        const stream = await groq.chat.completions.create({
+          model: "llama-3.3-70b-versatile",
+          messages,
+          max_tokens: 2000,
+          temperature: 0.7,
+          stream: true,
+        });
+
+        for await (const chunk of stream) {
+          const delta = chunk.choices[0]?.delta?.content || '';
+          if (delta) {
+            finalAnswer += delta;
+            onChunk(delta);
+          }
+          const chunkAny = chunk as any;
+          if (chunkAny.x_groq?.usage?.total_tokens) {
+            totalTokens = chunkAny.x_groq.usage.total_tokens;
           }
         }
+      } else if (docCount > 0) {
+        // AGENTIC Path Stream
+        // Send a temporary typing indicator or agent system message here if desired
+        const agentResult = await this.agent.run(
+          content,
+          { workspaceId: session.workspaceId },
+          previousMessages,
+          onChunk
+        );
+        finalAnswer = agentResult.answer;
+        citations = agentResult.citations;
+        totalTokens = agentResult.tokenUsage;
+        toolCalls = agentResult.toolCalls;
+      } else {
+        finalAnswer = "The workspace is empty. Please upload some documents first.";
+        onChunk(finalAnswer);
       }
 
-      // Build citations
-      const citations = this.buildCitations(chunks);
+      const suggestedFollowups = await this.generateFollowups(content, finalAnswer);
 
-      // Generate follow-up suggestions
-      const suggestedFollowups = await this.generateFollowups(content, fullResponse);
-
-      // Store AI message
       const aiMessage = await prisma.message.create({
         data: {
           sessionId,
           role: 'ASSISTANT',
-          content: fullResponse,
-          citations: JSON.parse(JSON.stringify(citations)),
+          content: finalAnswer,
+          citations: citations.length > 0 ? JSON.parse(JSON.stringify(citations)) : undefined,
+          toolCalls: toolCalls && toolCalls.length > 0 ? JSON.parse(JSON.stringify(toolCalls)) : undefined,
           suggestedFollowups: suggestedFollowups ? JSON.parse(JSON.stringify(suggestedFollowups)) : undefined,
           tokenUsage: totalTokens,
         },
@@ -234,24 +277,22 @@ export class ChatService {
         data: { lastActiveAt: new Date() },
       });
 
-      onDone({ id: aiMessage.id, citations, suggestedFollowups });
+      onDone({
+        id: aiMessage.id,
+        citations: citations.length > 0 ? citations : undefined,
+        toolCalls: toolCalls && toolCalls.length > 0 ? toolCalls : undefined,
+        suggestedFollowups,
+        routing: routeDecision
+      });
     } catch (error) {
       onError(error instanceof Error ? error : new Error('Stream failed'));
     }
   }
 
-  /**
-   * Branch a conversation at a specific message.
-   * Creates a new session copying messages up to the branch point.
-   */
-  public async branchSession(
-    userId: string,
-    sessionId: string,
-    atMessageId: string,
-  ) {
+  // Same branchSession untouched
+  public async branchSession(userId: string, sessionId: string, atMessageId: string) {
     const originalSession = await this.getSessionOrThrow(sessionId);
 
-    // Get messages up to the branch point
     const branchMessage = await prisma.message.findUnique({
       where: { id: atMessageId },
       select: { createdAt: true },
@@ -269,7 +310,6 @@ export class ChatService {
       orderBy: { createdAt: 'asc' },
     });
 
-    // Create new session with reference to parent
     const newSession = await prisma.chatSession.create({
       data: {
         workspaceId: originalSession.workspaceId,
@@ -280,7 +320,6 @@ export class ChatService {
       },
     });
 
-    // Copy messages to new session
     if (messagesToCopy.length > 0) {
       await prisma.message.createMany({
         data: messagesToCopy.map((m) => ({
@@ -289,14 +328,13 @@ export class ChatService {
           role: m.role,
           content: m.content,
           citations: m.citations ? JSON.parse(JSON.stringify(m.citations)) : undefined,
+          toolCalls: m.toolCalls ? JSON.parse(JSON.stringify(m.toolCalls)) : undefined,
         })),
       });
     }
 
     return newSession;
   }
-
-  // ===== Private Helpers =====
 
   private async getSessionOrThrow(sessionId: string) {
     const session = await prisma.chatSession.findUnique({
@@ -352,9 +390,6 @@ export class ChatService {
     ];
   }
 
-  /**
-   * Generate AI answer with citations (non-streaming).
-   */
   private async generateAnswer(
     query: string,
     chunks: RetrievedChunk[],
@@ -378,10 +413,6 @@ export class ChatService {
     return { answer, citations, tokenUsage };
   }
 
-  /**
-   * Generate 3 follow-up questions after an AI response.
-   * Uses a lightweight LLM call for cost efficiency.
-   */
   private async generateFollowups(
     userQuery: string,
     aiResponse: string,
@@ -404,36 +435,27 @@ export class ChatService {
       });
 
       const content = response.choices[0]?.message?.content?.trim() || '';
-      // Try to parse as JSON array
       const parsed = JSON.parse(content);
       if (Array.isArray(parsed) && parsed.length > 0) {
         return parsed.slice(0, 3);
       }
       return null;
     } catch {
-      logger.warn('Failed to generate follow-up questions');
       return null;
     }
   }
 
-  /**
-   * Build the system prompt with retrieval context.
-   */
   private buildSystemPrompt(contextText: string): string {
     if (!contextText) {
       return `You are OmniScript, an AI knowledge assistant. The user's workspace has no indexed documents yet. Let them know they need to upload documents first, then you can answer questions about them.`;
     }
 
     return `You are OmniScript, an AI knowledge assistant. Answer questions based on the provided context from the user's documents.
-
 RULES:
-1. Use the provided context to answer questions accurately.
-2. Cite your sources using [1], [2], etc. corresponding to the numbered context chunks.
-3. If the context doesn't contain enough information, say so honestly.
-4. Be concise but thorough.
-5. Maintain conversation context from previous messages.
-
-CONTEXT FROM USER'S DOCUMENTS:
+1. Cite your sources using [1], [2], etc. corresponding to the numbered context chunks.
+2. If the context doesn't contain enough information, say so honestly.
+3. Be concise but thorough.
+CONTEXT:
 ${contextText}`;
   }
 }
