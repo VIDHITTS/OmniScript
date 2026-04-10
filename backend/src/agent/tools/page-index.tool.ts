@@ -13,7 +13,7 @@ import { prisma } from '../../config/db';
  * - "Find the methodology section of the paper"
  * - User asks about a specific topic → agent browses document structure
  */
-export const PageIndexNavigationTool = buildTool({
+export const PageIndexNavigationTool = buildTool<any, any>({
   name: 'page_index_navigation',
   description: 'Navigate a document\'s structure (table of contents, headings, sections). Use this when the user asks about a specific part of a document, or when you need to locate content by section rather than searching for keywords.',
   inputSchema: z.object({

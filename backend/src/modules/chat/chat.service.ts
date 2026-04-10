@@ -149,7 +149,7 @@ export class ChatService {
       // AGENTIC Path: Orchestrate Tools
       const agentResult = await this.agent.run(
         content,
-        { workspaceId: session.workspaceId },
+        { workspaceId: session.workspaceId, userId },
         previousMessages
       );
       answer = agentResult.answer;
@@ -245,7 +245,7 @@ export class ChatService {
         // Send a temporary typing indicator or agent system message here if desired
         const agentResult = await this.agent.run(
           content,
-          { workspaceId: session.workspaceId },
+          { workspaceId: session.workspaceId, userId },
           previousMessages,
           onChunk
         );

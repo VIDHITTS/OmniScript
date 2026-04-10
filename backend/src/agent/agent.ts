@@ -1,5 +1,5 @@
 import { groq } from '../lib/groq';
-import { getAllTools, getToolByName, getToolDescriptions } from './tool.registry';
+import { getAllTools, getToolByName, getToolDescriptions } from './tool-registry';
 import { CRAGGrader, CRAGResult } from './crag-grader';
 import { AgentContext, AgentTool, ToolResult } from './tool.types';
 import { RetrievedChunk, Citation } from '../types';

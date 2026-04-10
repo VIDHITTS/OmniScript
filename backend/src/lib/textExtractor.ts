@@ -1,12 +1,14 @@
 import pdfParse from 'pdf-parse';
 import { Readable } from 'stream';
 import { logger } from '../utils/logger';
+import { YoutubeTranscript } from 'youtube-transcript';
+import { JSDOM } from 'jsdom';
+import { Readability } from '@mozilla/readability';
 
 /**
  * TextExtractor — Extracts raw text from various document formats.
  *
- * Phase 1 supports: PDF and plain text.
- * Future phases: YouTube transcripts, web pages, audio (Whisper), images (Vision).
+ * Supports: PDF, Plain Text/Markdown, YouTube transcripts, and Web Pages.
  */
 export class TextExtractor {
 
@@ -23,6 +25,61 @@ export class TextExtractor {
       default:
         logger.warn({ mimeType }, 'Unsupported MIME type for text extraction, treating as plain text');
         return this.extractPlainText(buffer);
+    }
+  }
+
+  /**
+   * Extract text from a YouTube video URL using transcripts.
+   */
+  public async extractYoutube(url: string): Promise<ExtractedText> {
+    try {
+      const transcript = await YoutubeTranscript.fetchTranscript(url);
+      const text = transcript.map(t => t.text).join(' ');
+      
+      return {
+        text,
+        metadata: {
+          sourceType: 'YOUTUBE',
+          url,
+          duration: transcript.reduce((acc, t) => acc + t.duration, 0)
+        }
+      };
+    } catch (error) {
+      logger.error({ url, error }, 'Failed to extract YouTube transcript');
+      throw new Error(`Failed to extract YouTube transcript for ${url}`);
+    }
+  }
+
+  /**
+   * Extract main article text from a Web URL.
+   */
+  public async extractWebUrl(url: string): Promise<ExtractedText> {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const html = await response.text();
+      
+      const doc = new JSDOM(html, { url });
+      const reader = new Readability(doc.window.document);
+      const article = reader.parse();
+      
+      if (!article) {
+         throw new Error('Readability failed to parse the page content');
+      }
+
+      return {
+        text: article.textContent || '',
+        metadata: {
+          sourceType: 'WEB_URL',
+          url,
+          title: article.title || '',
+          excerpt: article.excerpt || '',
+          siteName: article.siteName || ''
+        }
+      };
+    } catch (error) {
+      logger.error({ url, error }, 'Failed to extract web URL content');
+      throw new Error(`Failed to extract web page content for ${url}`);
     }
   }
 
