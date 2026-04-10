@@ -6,6 +6,7 @@ import { HyDESearchTool } from './tools/hyde-search.tool';
 import { MetadataFilterTool } from './tools/metadata-filter.tool';
 import { SummarizeTool } from './tools/summarize.tool';
 import { CompareTool } from './tools/compare.tool';
+import { GraphTraversalTool } from './tools/graph-traverse.tool';
 
 /**
  * Tool Registry — Single source of truth for all agent tools.
@@ -29,6 +30,9 @@ const TOOL_REGISTRY: AgentTool<any, any>[] = [
   // Synthesis
   SummarizeTool,
   CompareTool,
+  
+  // Knowledge Graph
+  GraphTraversalTool,
 ];
 
 /**

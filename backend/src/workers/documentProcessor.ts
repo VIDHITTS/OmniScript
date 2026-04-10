@@ -5,6 +5,7 @@ import { TextExtractor, streamToBuffer } from '../lib/textExtractor';
 import { SemanticChunker } from '../lib/chunker';
 import { Embedder, enrichChunkContext } from '../lib/embedder';
 import { StructureExtractor } from '../lib/structureExtractor';
+import { enqueueKgProcessing } from './kgProcessor';
 import { logger } from '../utils/logger';
 
 /**
@@ -189,6 +190,9 @@ async function processDocument(documentId: string, retryCount = 0): Promise<void
       { documentId, chunks: chunks.length, tokens: totalTokens, elapsed: `${elapsed}ms` },
       'Document processing complete'
     );
+
+    // 11. Trigger Knowledge Graph extraction in the background
+    enqueueKgProcessing(documentId);
 
   } catch (error) {
     logger.error({ documentId, error, retryCount }, 'Document processing failed');

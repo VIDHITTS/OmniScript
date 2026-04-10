@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { WorkspaceController } from "./workspace.controller";
+import { WorkspaceKgController } from "./workspace.kg.controller";
 import { authenticateToken } from "../../middleware/auth.middleware";
 import { validate } from "../../middleware/validate.middleware";
 import { requireWorkspaceAccess, requireWorkspaceRole } from "../../middleware/workspace.middleware";
@@ -11,6 +12,7 @@ import chatRoutes from "../chat/chat.routes";
 
 const router = Router();
 const workspaceController = new WorkspaceController();
+const workspaceKgController = new WorkspaceKgController();
 
 // All workspace routes require authentication
 router.use(authenticateToken);
@@ -27,5 +29,8 @@ router.delete("/:id", validate(workspaceIdSchema, "params"), requireWorkspaceAcc
 // Nested resource routes
 router.use("/:workspaceId/documents", requireWorkspaceAccess(), documentRoutes);
 router.use("/:workspaceId/chat", requireWorkspaceAccess(), chatRoutes);
+
+// Knowledge Graph
+router.get("/:workspaceId/knowledge-graph", requireWorkspaceAccess(), workspaceKgController.getKnowledgeGraph);
 
 export default router;
