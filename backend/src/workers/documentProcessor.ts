@@ -4,8 +4,6 @@ import { gridFsStorage } from '../lib/storage/GridFsStorageService';
 import { TextExtractor, streamToBuffer } from '../lib/textExtractor';
 import { SemanticChunker } from '../lib/chunker';
 import { Embedder, enrichChunkContext } from '../lib/embedder';
-import { StructureExtractor } from '../lib/structureExtractor';
-import { enqueueKgProcessing } from './kgProcessor';
 import { logger } from '../utils/logger';
 
 /**
@@ -25,7 +23,6 @@ const MAX_RETRIES = 3;
 const textExtractor = new TextExtractor();
 const chunker = new SemanticChunker(500, 50);
 const embedder = new Embedder();
-const structureExtractor = new StructureExtractor();
 
 // Simple in-memory processing queue
 const processingQueue: string[] = [];
@@ -93,43 +90,30 @@ async function processDocument(documentId: string, retryCount = 0): Promise<void
     // 2. Update status → PROCESSING
     await updateStatus(documentId, Status.PROCESSING);
 
-    // 3. Download file from storage or fetch URL content
-    let text = '';
-    let metadata: Record<string, unknown> = {};
-
-    if (document.sourceType === 'YOUTUBE') {
-      const result = await textExtractor.extractYoutube(document.storageUrl!);
-      text = result.text;
-      metadata = result.metadata;
-    } else if (document.sourceType === 'WEB_URL') {
-      const result = await textExtractor.extractWebUrl(document.storageUrl!);
-      text = result.text;
-      metadata = result.metadata;
-    } else {
-      const downloadStream = await gridFsStorage.download(document.storageUrl!);
-      const fileBuffer = await streamToBuffer(downloadStream);
-      
-      const result = await textExtractor.extract(
-        fileBuffer,
-        document.mimeType || 'application/octet-stream'
-      );
-      text = result.text;
-      metadata = result.metadata;
+    // 3. Download file from storage
+    let fileBuffer: Buffer;
+    if (document.sourceType === 'WEB_URL' || document.sourceType === 'YOUTUBE') {
+      // Phase 1: Skip external sources
+      logger.warn({ documentId, sourceType: document.sourceType }, 'External source processing not yet implemented');
+      await updateStatus(documentId, Status.FAILED, 'External source processing not yet implemented');
+      return;
     }
+
+    const downloadStream = await gridFsStorage.download(document.storageUrl!);
+    fileBuffer = await streamToBuffer(downloadStream);
+
+    // 4. Extract text
+    const { text, metadata } = await textExtractor.extract(
+      fileBuffer,
+      document.mimeType || 'application/octet-stream'
+    );
 
     if (!text || text.trim().length === 0) {
       await updateStatus(documentId, Status.FAILED, 'No text extracted from document');
       return;
     }
 
-    // 5. Extract document structure (for PageIndex navigation)
-    try {
-      await structureExtractor.extractAndStore(documentId, text, metadata);
-    } catch (structErr) {
-      logger.warn({ documentId, error: structErr }, 'Structure extraction failed, continuing with chunking');
-    }
-
-    // 6. Update status → CHUNKING
+    // 5. Update status → CHUNKING
     await updateStatus(documentId, Status.CHUNKING);
 
     // 6. Semantic chunking
@@ -190,9 +174,6 @@ async function processDocument(documentId: string, retryCount = 0): Promise<void
       { documentId, chunks: chunks.length, tokens: totalTokens, elapsed: `${elapsed}ms` },
       'Document processing complete'
     );
-
-    // 11. Trigger Knowledge Graph extraction in the background
-    enqueueKgProcessing(documentId);
 
   } catch (error) {
     logger.error({ documentId, error, retryCount }, 'Document processing failed');

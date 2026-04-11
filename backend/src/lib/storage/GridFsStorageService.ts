@@ -7,17 +7,9 @@ import { logger } from "../../utils/logger";
 export class GridFsStorageService implements StorageService {
   private client: MongoClient;
   private bucket!: GridFSBucket;
-  private connected = false;
 
   constructor() {
     this.client = new MongoClient(env.MONGO_URI);
-  }
-
-  /**
-   * Check if GridFS is connected and ready.
-   */
-  public isConnected(): boolean {
-    return this.connected;
   }
 
   async connect(): Promise<void> {
@@ -26,7 +18,6 @@ export class GridFsStorageService implements StorageService {
       const db = this.client.db();
       // Bucket name defaults to 'fs' if not specified
       this.bucket = new GridFSBucket(db, { bucketName: "documents" });
-      this.connected = true;
       logger.info("MongoDB GridFS successfully connected");
     } catch (error) {
       logger.error({ err: error }, "Failed to connect to MongoDB GridFS");
