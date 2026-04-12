@@ -8,6 +8,7 @@ import dotenv from "dotenv";
 import authRoutes from "./modules/auth/auth.routes";
 import workspaceRoutes from "./modules/workspace/workspace.routes";
 import documentRoutes from "./modules/document/document.routes";
+import guestRoutes from "./modules/guest/guest.routes";
 import { env } from "./config/env";
 import { logger } from "./utils/logger";
 import { gridFsStorage } from "./lib/storage/GridFsStorageService";
@@ -36,6 +37,7 @@ app.use(express.json());
 
 // Feature routing
 app.use("/api/auth", authRoutes);
+app.use("/api/guest", guestRoutes);
 app.use("/api/workspaces", workspaceRoutes);
 app.use("/api/documents", documentRoutes);
 
