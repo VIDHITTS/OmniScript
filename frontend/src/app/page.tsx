@@ -2,6 +2,7 @@
 
 import { apiClient, uploadClient } from "@/lib/api";
 import { useStore } from "@/store/useStore";
+import GuestLanding from "@/components/GuestLanding";
 import {
   AlertCircle,
   ArrowUp,
@@ -426,17 +427,24 @@ export default function Home() {
 
   if (!mounted) return null;
 
-  if (!isAuthenticated) {
-    return (
-      <main className="min-h-screen bg-background text-foreground">
-        <div className="mx-auto grid min-h-screen w-full max-w-6xl gap-10 px-6 py-8 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
-          <section className="space-y-8">
-            <div className="inline-flex items-center gap-2 rounded-md border border-border bg-surface px-3 py-2 text-sm font-medium text-muted">
-              <ShieldCheck className="h-4 w-4 text-primary" />
-              Private knowledge workspaces
-            </div>
+  // Check URL for mode parameter
+  const urlParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+  const urlMode = urlParams?.get("mode");
+  const showAuth = urlMode === "login" || urlMode === "signup";
 
-            <div className="space-y-5">
+  if (!isAuthenticated) {
+    // Show auth page if mode=login or mode=signup in URL
+    if (showAuth) {
+      return (
+        <main className="min-h-screen bg-background text-foreground">
+          <div className="mx-auto grid min-h-screen w-full max-w-6xl gap-10 px-6 py-8 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
+            <section className="space-y-8">
+              <div className="inline-flex items-center gap-2 rounded-md border border-border bg-surface px-3 py-2 text-sm font-medium text-muted">
+                <ShieldCheck className="h-4 w-4 text-primary" />
+                Private knowledge workspaces
+              </div>
+
+              <div className="space-y-5">
               <h1 className="max-w-3xl text-4xl font-semibold tracking-tight text-foreground sm:text-6xl">
                 OmniScript turns documents into a working knowledge system.
               </h1>
@@ -548,7 +556,11 @@ export default function Home() {
           </section>
         </div>
       </main>
-    );
+      );
+    }
+
+    // Default: Show guest landing page
+    return <GuestLanding />;
   }
 
   return (
