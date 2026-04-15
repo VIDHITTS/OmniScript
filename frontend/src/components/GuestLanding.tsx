@@ -4,10 +4,9 @@ import { useState, useEffect, FormEvent } from "react";
 import { Upload, MessageSquare, ArrowRight, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
 import { useGuestStore } from "@/store/useGuestStore";
 import { guestApi } from "@/lib/guest-api";
-import { useStore } from "@/store/useStore";
+import SignupPrompt from "./SignupPrompt";
 
 export default function GuestLanding() {
-  const { setAuth } = useStore();
   const {
     sessionId,
     limits,
@@ -30,7 +29,8 @@ export default function GuestLanding() {
   const [messages, setMessages] = useState<any[]>([]);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
-  const [showSignupPrompt, setShowSignupPrompt] = useState(false);
+  const [showSignupModal, setShowSignupModal] = useState(false);
+  const [limitType, setLimitType] = useState<"document" | "query">("document");
 
   useEffect(() => {
     setMounted(true);
@@ -58,7 +58,8 @@ export default function GuestLanding() {
     } catch (err: any) {
       setError(err.message);
       if (err.message.includes("limit")) {
-        setShowSignupPrompt(true);
+        setLimitType("document");
+        setShowSignupModal(true);
       }
     } finally {
       setUploading(false);
@@ -69,7 +70,7 @@ export default function GuestLanding() {
     e.preventDefault();
     if (!query.trim() || !workspaceId) return;
 
-    setChat ting(true);
+    setChatting(true);
     setError("");
 
     try {
@@ -85,7 +86,8 @@ export default function GuestLanding() {
     } catch (err: any) {
       setError(err.message);
       if (err.message.includes("limit")) {
-        setShowSignupPrompt(true);
+        setLimitType("query");
+        setShowSignupModal(true);
       }
     } finally {
       setChatting(false);
@@ -95,9 +97,37 @@ export default function GuestLanding() {
   if (!mounted) return null;
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      {/* Hero Section */}
-      <div className="border-b border-border bg-surface">
+    <>
+      <SignupPrompt
+        isOpen={showSignupModal}
+        onClose={() => setShowSignupModal(false)}
+        limitType={limitType}
+      />
+
+      <div className="min-h-screen bg-background text-foreground">
+        {/* Header */}
+        <header className="border-b border-border bg-surface">
+          <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
+            <h1 className="text-xl font-bold">OmniScript</h1>
+            <div className="flex gap-3">
+              <button
+                onClick={() => window.location.href = "/?mode=login"}
+                className="rounded-lg border border-border px-4 py-2 text-sm font-semibold hover:bg-subtle"
+              >
+                Log In
+              </button>
+              <button
+                onClick={() => window.location.href = "/?mode=signup"}
+                className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90"
+              >
+                Sign Up
+              </button>
+            </div>
+          </div>
+        </header>
+
+        {/* Hero Section */}
+        <div className="border-b border-border bg-surface">
         <div className="mx-auto max-w-5xl px-6 py-12">
           <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">
             Try OmniScript Free
@@ -138,24 +168,6 @@ export default function GuestLanding() {
         )}
 
         {/* Signup Prompt Modal */}
-        {showSignupPrompt && (
-          <div className="mb-6 rounded-lg border-2 border-primary bg-surface p-6">
-            <h3 className="text-xl font-semibold">Ready for more?</h3>
-            <p className="mt-2 text-muted">
-              Sign up to upload unlimited documents, create workspaces, and get full AI-powered responses.
-            </p>
-            <button
-              onClick={() => {
-                // Navigate to signup - you'll implement this
-                window.location.href = "/?mode=signup";
-              }}
-              className="mt-4 flex items-center gap-2 rounded-lg bg-primary px-6 py-3 font-semibold text-primary-foreground"
-            >
-              Sign Up Free <ArrowRight className="h-4 w-4" />
-            </button>
-          </div>
-        )}
-
         <div className="grid gap-6 lg:grid-cols-2">
           {/* Upload Section */}
           <div className="rounded-lg border border-border bg-surface p-6">
