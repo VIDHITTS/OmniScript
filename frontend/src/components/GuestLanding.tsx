@@ -266,5 +266,6 @@ export default function GuestLanding() {
         </div>
       </div>
     </div>
+    </>
   );
 }
