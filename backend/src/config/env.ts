@@ -9,7 +9,7 @@ const envSchema = z.object({
     .default("development"),
   DATABASE_URL: z.string().url(),
   MONGO_URI: z.string().url(),
-  REDIS_URL: z.string().url(),
+  REDIS_URL: z.string().url().optional(),
   JWT_SECRET: z.string().min(10),
   JWT_REFRESH_SECRET: z.string().min(10),
   GROQ_API_KEY: z.string().min(1),

@@ -1,0 +1,171 @@
+# Implementation Plan
+
+- [x] 1. Write bug condition exploration test
+  - **Property 1: Bug Condition** - Application Fails to Start Without Redis
+  - **CRITICAL**: This test MUST FAIL on unfixed code - failure confirms the bug exists
+  - **DO NOT attempt to fix the test or the code when it fails**
+  - **NOTE**: This test encodes the expected behavior - it will validate the fix when it passes after implementation
+  - **GOAL**: Surface counterexamples that demonstrate the bug exists
+  - **Scoped PBT Approach**: Test concrete failing scenarios - application startup without REDIS_URL, auth operations without Redis connection, worker shutdown without Redis
+  - Test that application startup fails when REDIS_URL is not provided (from Bug Condition in design)
+  - Test that AuthService.storeRefreshToken() crashes when Redis is unavailable
+  - Test that AuthService.refreshUserToken() crashes when Redis is unavailable
+  - Test that AuthService.logoutUser() crashes when Redis is unavailable
+  - Test that workers graceful shutdown crashes when attempting redis.quit()
+  - Test that queue initialization fails when Redis is unavailable
+  - The test assertions should match the Expected Behavior Properties from design: application starts successfully, auth operations use PostgreSQL, shutdown completes without Redis
+  - Run test on UNFIXED code
+  - **EXPECTED OUTCOME**: Test FAILS (this is correct - it proves the bug exists)
+  - Document counterexamples found to understand root cause (e.g., "env validation requires REDIS_URL", "AuthService crashes on redis.set()", "workers crash on redis.quit()")
+  - Mark task complete when test is written, run, and failure is documented
+  - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5_
+
+- [x] 2. Write preservation property tests (BEFORE implementing fix)
+  - **Property 2: Preservation** - Authentication Flow Behavior Unchanged
+  - **IMPORTANT**: Follow observation-first methodology
+  - Observe behavior on UNFIXED code for authentication operations (register, login, refresh, logout)
+  - Observe: User registration creates user record, hashes password, generates JWT tokens
+  - Observe: User login validates credentials, returns access and refresh tokens
+  - Observe: Token refresh validates old token, issues new token pair
+  - Observe: User logout invalidates refresh token
+  - Observe: Document processing triggers queue operations
+  - Observe: Graceful shutdown closes database connections
+  - Write property-based tests capturing observed behavior patterns from Preservation Requirements
+  - Property-based testing generates many test cases for stronger guarantees
+  - Test that for all valid user credentials, registration produces user records with hashed passwords
+  - Test that for all valid login attempts, authentication returns JWT tokens with correct structure
+  - Test that for all valid refresh tokens, token refresh produces new valid token pairs
+  - Test that for all logout requests, tokens are invalidated correctly
+  - Test that document processing continues to function
+  - Test that graceful shutdown closes database connections properly
+  - Run tests on UNFIXED code
+  - **EXPECTED OUTCOME**: Tests PASS (this confirms baseline behavior to preserve)
+  - Mark task complete when tests are written, run, and passing on unfixed code
+  - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7_
+
+- [x] 3. Fix for Redis removal to enable Hugging Face Spaces deployment
+
+  - [x] 3.1 Add RefreshToken model to Prisma schema
+    - Open backend/prisma/schema.prisma
+    - Add RefreshToken model with fields: id (String @id @default(uuid())), userId (String), token (String), expiresAt (DateTime), createdAt (DateTime @default(now()))
+    - Add relation to User model: user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+    - Add index on userId for fast lookups: @@index([userId])
+    - Add index on token for fast token lookups: @@index([token])
+    - Run migration: npx prisma migrate dev --name add_refresh_token_model
+    - _Bug_Condition: isBugCondition(input) where input.redisAvailable = false_
+    - _Expected_Behavior: Refresh tokens stored in PostgreSQL instead of Redis_
+    - _Preservation: Authentication flows continue to work with database-backed token storage_
+    - _Requirements: 2.2, 3.2, 3.3, 3.4_
+
+  - [x] 3.2 Update AuthService to use PostgreSQL for refresh token storage
+    - Open backend/src/modules/auth/auth.service.ts
+    - Remove Redis import: delete `import { redis } from "../../lib/redis";`
+    - Update storeRefreshToken method:
+      - Remove `await redis.set(...)` call
+      - Add Prisma query: `await prisma.refreshToken.create({ data: { userId, token: hashedToken, expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) } })`
+      - Hash the refresh token before storing using bcrypt or crypto
+    - Update refreshUserToken method:
+      - Remove `await redis.get(...)` call
+      - Add Prisma query: `await prisma.refreshToken.findFirst({ where: { userId, token: hashedToken, expiresAt: { gte: new Date() } } })`
+      - Validate token exists and hasn't expired
+      - Delete old token: `await prisma.refreshToken.delete({ where: { id: oldToken.id } })`
+      - Create new token with new expiration
+    - Update logoutUser method:
+      - Remove `await redis.del(...)` call
+      - Add Prisma query: `await prisma.refreshToken.deleteMany({ where: { userId } })`
+    - _Bug_Condition: isBugCondition(input) where authServiceInitializing() = true AND input.redisAvailable = false_
+    - _Expected_Behavior: Auth operations complete successfully using PostgreSQL_
+    - _Preservation: Token generation, validation, and invalidation logic unchanged_
+    - _Requirements: 2.2, 3.1, 3.2, 3.3, 3.4_
+
+  - [x] 3.3 Remove or disable Redis-based queue system
+    - Open backend/src/lib/queue.ts
+    - Remove Redis import: delete `import { redis } from "./redis";`
+    - Option A (Disable Queue): Export null or mock queue object when REDIS_URL not available
+    - Option B (Remove Queue): Delete queue.ts entirely and update document processing to be synchronous
+    - If Option A: Add conditional check `if (!process.env.REDIS_URL) { export const documentProcessingQueue = null; }`
+    - Update document controller to handle null queue gracefully (process synchronously)
+    - Add comment explaining queue is disabled without Redis
+    - _Bug_Condition: isBugCondition(input) where queueSystemInitializing() = true AND input.redisAvailable = false_
+    - _Expected_Behavior: Application starts without queue, document processing works synchronously_
+    - _Preservation: Document processing continues to function_
+    - _Requirements: 2.3, 3.5_
+
+  - [x] 3.4 Update workers module to remove Redis shutdown logic
+    - Open backend/src/workers/index.ts
+    - Remove Redis import: delete `import { redis } from "../lib/redis";`
+    - Update gracefulShutdown function:
+      - Remove `await redis.quit()` call
+      - Keep Prisma disconnect logic: `await prisma.$disconnect()`
+      - Add comment: "Redis shutdown removed - no longer using Redis"
+    - _Bug_Condition: isBugCondition(input) where workersModuleShuttingDown() = true AND input.redisAvailable = false_
+    - _Expected_Behavior: Graceful shutdown completes without Redis operations_
+    - _Preservation: Database connections still closed properly during shutdown_
+    - _Requirements: 2.4, 3.6_
+
+  - [x] 3.5 Make REDIS_URL optional in environment configuration
+    - Open backend/src/config/env.ts
+    - Update REDIS_URL validation: change `REDIS_URL: z.string().url()` to `REDIS_URL: z.string().url().optional()`
+    - This allows application to start without Redis configuration
+    - _Bug_Condition: isBugCondition(input) where input.environment = "HUGGING_FACE_SPACES" AND REDIS_URL not provided_
+    - _Expected_Behavior: Application starts successfully without REDIS_URL_
+    - _Preservation: All other environment variables still validated_
+    - _Requirements: 2.5_
+
+  - [x] 3.6 Remove or conditionally initialize Redis client
+    - Open backend/src/lib/redis.ts
+    - Option A (Conditional): Wrap Redis initialization in check: `if (process.env.REDIS_URL) { ... } else { export const redis = null; }`
+    - Option B (Delete): Delete redis.ts entirely if no longer needed
+    - Update any remaining imports to handle null redis client
+    - _Bug_Condition: isBugCondition(input) where applicationAttemptingRedisConnection() = true AND input.redisAvailable = false_
+    - _Expected_Behavior: No Redis connection attempted when unavailable_
+    - _Preservation: Other services continue to function_
+    - _Requirements: 2.1, 2.2, 2.3, 2.4_
+
+  - [x] 3.7 Remove Redis dependencies from package.json
+    - Open backend/package.json
+    - Remove `ioredis` from dependencies
+    - Remove `bullmq` from dependencies
+    - Run `npm install` to update package-lock.json
+    - This reduces bundle size and eliminates unnecessary packages
+    - _Bug_Condition: isBugCondition(input) where input.environment = "HUGGING_FACE_SPACES"_
+    - _Expected_Behavior: Build completes without Redis packages_
+    - _Preservation: All other dependencies remain functional_
+    - _Requirements: 2.1_
+
+  - [x] 3.8 Verify bug condition exploration test now passes
+    - **Property 1: Expected Behavior** - Application Starts Without Redis
+    - **IMPORTANT**: Re-run the SAME test from task 1 - do NOT write a new test
+    - The test from task 1 encodes the expected behavior
+    - When this test passes, it confirms the expected behavior is satisfied
+    - Run bug condition exploration test from step 1
+    - Verify application starts successfully without REDIS_URL
+    - Verify AuthService operations complete using PostgreSQL
+    - Verify workers shutdown completes without Redis
+    - Verify queue system handles missing Redis gracefully
+    - **EXPECTED OUTCOME**: Test PASSES (confirms bug is fixed)
+    - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5_
+
+  - [x] 3.9 Verify preservation tests still pass
+    - **Property 2: Preservation** - Authentication Flow Behavior Unchanged
+    - **IMPORTANT**: Re-run the SAME tests from task 2 - do NOT write new tests
+    - Run preservation property tests from step 2
+    - Verify user registration still creates users with hashed passwords
+    - Verify login still validates credentials and returns tokens
+    - Verify token refresh still validates and issues new tokens
+    - Verify logout still invalidates tokens
+    - Verify document processing still functions
+    - Verify graceful shutdown still closes database connections
+    - **EXPECTED OUTCOME**: Tests PASS (confirms no regressions)
+    - Confirm all tests still pass after fix (no regressions)
+    - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7_
+
+- [-] 4. Checkpoint - Ensure all tests pass
+  - Run all unit tests: `npm test`
+  - Run all integration tests if available
+  - Verify application starts successfully without REDIS_URL environment variable
+  - Verify full authentication flow works: register → login → refresh → logout
+  - Verify document upload and processing works (synchronously or with alternative queue)
+  - Verify graceful shutdown works correctly
+  - Test deployment to Hugging Face Spaces (or simulate HF Spaces environment)
+  - Ensure all tests pass, ask the user if questions arise

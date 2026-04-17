@@ -1,279 +1,304 @@
 import { groq } from '../lib/groq';
-import { getAllTools, getToolByName, getToolDescriptions } from './tool-registry';
-import { CRAGGrader, CRAGResult } from './crag-grader';
-import { AgentContext, AgentTool, ToolResult } from './tool.types';
-import { RetrievedChunk, Citation } from '../types';
+import { getAllTools } from './tool-registry';
+import { AgentContext } from './tool.types';
+import { QueryRouter } from './query-router';
+import { CRAGGrader } from './crag-grader';
+import { HybridRetriever } from '../lib/retrieval';
+import { CrossEncoderReranker } from '../lib/reranker';
+import { ContextCompressor } from '../lib/contextCompressor';
+import { prisma } from '../config/db';
 import { logger } from '../utils/logger';
 
-export interface AgentResponse {
-  answer: string;
-  citations: Citation[];
-  tokenUsage: number;
-  toolCalls: Record<string, unknown>[];
-}
-
-class TokenBudgetTracker {
-  private totalTokens = 0;
-  private readonly maxBudget: number;
-
-  constructor(maxBudget = 10000) {
-    this.maxBudget = maxBudget;
-  }
-
-  public add(tokens: number) {
-    this.totalTokens += tokens;
-  }
-
-  public getTotal(): number {
-    return this.totalTokens;
-  }
-
-  public shouldStop(): boolean {
-    return this.totalTokens >= this.maxBudget;
-  }
-}
+const ITERATION_LIMIT = 5;
 
 /**
- * Agent Orchestrator — The core intelligence layer.
- * 
- * Implements the plan -> execute -> evaluate -> retry loop.
+ * Agent — Agentic RAG orchestrator.
+ *
+ * Implements the plan → execute → evaluate → retry loop:
+ * 1. QueryRouter classifies the query (FAST / AGENTIC / PAGEINDEX)
+ * 2. FAST path: hybrid retrieval + Cohere reranking → direct LLM answer
+ * 3. AGENTIC path: iterative function-calling loop with tool selection
+ * 4. After each retrieval, CRAGGrader evaluates relevance:
+ *    - RELEVANT  → synthesize answer
+ *    - AMBIGUOUS → add HyDE fallback, continue
+ *    - IRRELEVANT → retry with different tools, up to ITERATION_LIMIT
+ *
+ * Inspired by Claude Code's coordinator pattern.
  */
 export class Agent {
-  private grader: CRAGGrader;
-  private readonly MAX_ITERATIONS = 4;
+  private tools = getAllTools();
+  private router = new QueryRouter();
+  private crag = new CRAGGrader();
+  private compressor = new ContextCompressor();
+  private retriever = new HybridRetriever();
+  private reranker = new CrossEncoderReranker();
 
-  constructor() {
-    this.grader = new CRAGGrader();
+  constructor(private context: AgentContext) {}
+
+  public async evaluate(
+    query: string,
+    chatHistory: { role: 'user' | 'assistant' | 'system'; content: string }[] = []
+  ): Promise<{ answer: string; tokensUsed: number; toolCallsMade: string[] }> {
+    let tokensUsed = 0;
+    const toolCallsMade: string[] = [];
+
+    // ─── Step 1: Classify the query ───────────────────────────────────────────
+    const hasDocuments = await this.workspaceHasDocuments();
+    const routing = await this.router.route(query, hasDocuments);
+    logger.info({ queryType: routing.queryType, confidence: routing.confidence, reasoning: routing.reasoning }, 'Query routed');
+
+    // ─── Step 2: FAST PATH — hybrid retrieval + rerank + direct LLM answer ───
+    if (routing.queryType === 'FAST') {
+      return this.fastPath(query, chatHistory, tokensUsed, toolCallsMade);
+    }
+
+    // ─── Step 3: AGENTIC PATH — iterative tool-calling loop ──────────────────
+    return this.agenticPath(query, chatHistory, tokensUsed, toolCallsMade, routing.suggestedTools);
   }
 
-  public async run(
+  // ─────────────────────────────────────────────────────────────────────────────
+  // FAST PATH: hybrid retrieval → reranking → direct LLM answer
+  // ─────────────────────────────────────────────────────────────────────────────
+  private async fastPath(
     query: string,
-    context: AgentContext,
-    previousMessages: { role: string; content: string }[],
-    onChunk?: (chunk: string) => void
-  ): Promise<AgentResponse> {
-    const budgetTracker = new TokenBudgetTracker();
-    let currentQuery = query;
-    let iteration = 0;
-    
-    let bestChunks: RetrievedChunk[] = [];
-    let bestCrag: CRAGResult | null = null;
-    const toolCallsRecord: Record<string, unknown>[] = [];
-    
-    // The Execution Loop
-    while (iteration < this.MAX_ITERATIONS && !budgetTracker.shouldStop()) {
-      iteration++;
-      logger.info({ iteration, query: currentQuery }, 'Agent starting iteration');
-      
-      // Step 1: Plan (Choose Tools)
-      const selectedToolsData = await this.planTools(currentQuery, previousMessages, budgetTracker);
-      
-      if (!selectedToolsData || selectedToolsData.length === 0) {
-        break; // No tools selected, fallback or break
-      }
+    chatHistory: { role: 'user' | 'assistant' | 'system'; content: string }[],
+    tokensUsed: number,
+    toolCallsMade: string[]
+  ): Promise<{ answer: string; tokensUsed: number; toolCallsMade: string[] }> {
+    toolCallsMade.push('hybrid_retrieval', 'cohere_rerank');
 
-      // Step 2: Execute Tools
-      const chunksFound: RetrievedChunk[] = [];
-      for (const t of selectedToolsData) {
-        const tool = getToolByName(t.name);
-        if (!tool) continue;
-        
-        try {
-          const result = await tool.execute(t.input, context);
-          toolCallsRecord.push({ name: t.name, input: t.input, success: true });
-          
-          if (result.data && Array.isArray(result.data)) {
-             // For retrieval tools that return an array of chunks
-             chunksFound.push(...(result.data as RetrievedChunk[]));
-          } else if (result.data && typeof result.data === 'object' && 'chunks' in result.data) {
-             // For page index or others
-             chunksFound.push(...((result.data as any).chunks as RetrievedChunk[] || []));
-          } else if (result.data && typeof result.data === 'object' && 'comparison' in result.data) {
-             // Fallback for summarize/compare returning objects
-             chunksFound.push({
-               id: `gen_${iteration}`,
-               content: JSON.stringify(result.data),
-               contextualizedContent: null,
-               chunkIndex: 0,
-               sectionHeading: 'Generated Tool Output',
-               location: {},
-               documentId: 'agent',
-               documentTitle: 'Tool Execution',
-               score: result.confidence || 1.0
-             });
-          }
-        } catch (e) {
-          logger.warn({ tool: t.name, error: e }, 'Tool execution failed');
-          toolCallsRecord.push({ name: t.name, input: t.input, success: false });
-        }
-      }
-      
-      // If no chunks, try refining the query on the next iteration
-      if (chunksFound.length === 0) {
-        currentQuery = `Try to find any general information about: ${currentQuery}`;
-        continue;
-      }
+    // Retrieve + rerank
+    const candidates = await this.retriever.retrieve(this.context.workspaceId, query, 50);
+    const topChunks = await this.reranker.rerank(query, candidates, 5);
 
-      // De-duplicate chunks
-      const uniqueChunks = Array.from(new Map(chunksFound.map(c => [c.id, c])).values());
-
-      // Step 3: Evaluate (CRAG)
-      const cragResult = await this.grader.evaluate(currentQuery, uniqueChunks);
-      
-      logger.info({ verdict: cragResult.verdict, score: cragResult.score }, 'CRAG Evaluation');
-
-      if (!bestCrag || cragResult.score > bestCrag.score) {
-        bestCrag = cragResult;
-        bestChunks = uniqueChunks;
-      }
-      
-      // Step 4: Branch on Verdict
-      if (cragResult.verdict === 'RELEVANT') {
-        break; // We have what we need
-      } else if (cragResult.verdict === 'AMBIGUOUS' && iteration < this.MAX_ITERATIONS - 1) {
-        // We might want to try one more time to improve it
-        currentQuery = cragResult.suggestedRewrite || `${currentQuery} more details`;
-      } else if (cragResult.verdict === 'IRRELEVANT' && iteration < this.MAX_ITERATIONS) {
-        // Rewrite and retry completely
-        currentQuery = cragResult.suggestedRewrite || `Different formulation of: ${currentQuery}`;
-      } else {
-        break; // we hit the max iterations or are satisfied with ambiguity
-      }
-    }
-    
-    // Step 5: Synthesize (Generate Answer)
-    const { answer, citations, tokensUsed } = await this.synthesize(
+    // Compress context to reduce token usage
+    const compressedChunks = await this.compressor.smartCompress(
       query,
-      bestChunks,
-      previousMessages,
-      onChunk
+      topChunks.map((c) => ({ id: c.id, content: c.content, sectionHeading: c.sectionHeading, documentTitle: c.documentTitle })),
+      3000 // Target token budget for context
     );
-    budgetTracker.add(tokensUsed);
-    
-    return {
-      answer,
-      citations,
-      tokenUsage: budgetTracker.getTotal(),
-      toolCalls: toolCallsRecord
-    };
-  }
-  
-  private async planTools(
-    query: string,
-    previousMessages: { role: string; content: string }[],
-    budget: TokenBudgetTracker
-  ): Promise<Array<{ name: string; input: any }>> {
-    const descriptions = getToolDescriptions();
-    
-    const response = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
-      messages: [
-        {
-          role: 'system',
-          content: `You are an AI planner. Select the best tools to answer the user's query.
+    toolCallsMade.push('context_compression');
 
-Available tools:
-${descriptions}
+    // Grade relevance
+    const grade = await this.crag.evaluateRetrieval(query, compressedChunks.map((c) => ({ id: c.id, content: c.content })));
+    logger.info({ grade }, 'CRAG grade for fast path');
 
-Respond in this exact JSON format. Return an array of tools to execute:
-[
-  {
-    "name": "tool_name",
-    "input": { ... }
-  }
-]
-If the query is simple, pick just one. If complex, you can pick up to 2 parallel tools. Always provide valid JSON.`
-        },
-        ...previousMessages.slice(-5).map(m => ({
-          role: m.role.toLowerCase() as 'user'|'assistant',
-          content: m.content
-        })),
-        { role: 'user', content: query }
-      ],
-      temperature: 0.1,
-      max_tokens: 300
-    });
-    
-    budget.add(response.usage?.total_tokens || 0);
-    
-    try {
-      const content = response.choices[0]?.message?.content || '[]';
-      const parsed = JSON.parse(content);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [{ name: 'vector_search', input: { query } }]; // Fallback
-    }
-  }
-
-  private async synthesize(
-    query: string,
-    chunks: RetrievedChunk[],
-    previousMessages: { role: string; content: string }[],
-    onChunk?: (chunk: string) => void
-  ) {
-    const contextText = chunks.slice(0, 5).map((c, i) =>
-      `[${i + 1}] (${c.sectionHeading || 'Unknown Section'} - ${c.documentTitle}):\n${c.content}`,
+    const contextText = compressedChunks.map((c, i) =>
+      `[${i + 1}] (${c.sectionHeading || 'Section'} — ${c.documentTitle}):\n${c.content}`
     ).join('\n\n---\n\n');
 
-    const systemPrompt = `You are OmniScript, an AI knowledge assistant. Answer questions based on the provided context from the user's documents.
-RULES:
-1. Cite your sources using [1], [2], etc. corresponding to the numbered context chunks.
-2. If context doesn't contain the answer, say so.
-3. Be concise but thorough.
+    const systemPrompt = grade === 'IRRELEVANT'
+      ? `You are OmniScript, an AI knowledge assistant. The retrieved context does not appear relevant to the query. Be honest and suggest the user uploads more relevant documents.`
+      : `You are OmniScript, an AI knowledge assistant. Answer questions based on the provided context from the user's documents.
 
-CONTEXT:
+RULES:
+1. Use the provided context to answer accurately.
+2. Cite sources using [1], [2], etc. matching the numbered context chunks.
+3. If the context is insufficient, say so honestly.
+4. Be concise but thorough.
+
+CONTEXT FROM USER'S DOCUMENTS:
 ${contextText}`;
 
-    const messages = [
-      { role: 'system' as const, content: systemPrompt },
-      ...previousMessages.map((m) => ({
-        role: m.role.toLowerCase() as 'user' | 'assistant',
-        content: m.content,
-      })),
-      { role: 'user' as const, content: query },
+    const messages: any[] = [
+      { role: 'system', content: systemPrompt },
+      ...chatHistory.slice(-5), // Reduced from 10 to 5
+      { role: 'user', content: query },
     ];
 
-    const stream = await groq.chat.completions.create({
+    const response = await groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
       messages,
       max_tokens: 2000,
-      temperature: 0.7,
-      stream: true,
+      temperature: 0.5,
     });
 
-    let fullResponse = '';
-    let totalTokens = 0;
+    tokensUsed += response.usage?.total_tokens || 0;
+    const answer = response.choices[0]?.message?.content || 'Could not generate a response.';
 
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta?.content || '';
-      if (delta) {
-        fullResponse += delta;
-        if (onChunk) onChunk(delta);
-      }
-      
-      const chunkAny = chunk as unknown as Record<string, unknown>;
-      if (chunkAny.x_groq && typeof chunkAny.x_groq === 'object') {
-        const xGroq = chunkAny.x_groq as Record<string, unknown>;
-        if (xGroq.usage && typeof xGroq.usage === 'object') {
-          const usage = xGroq.usage as Record<string, number>;
-          totalTokens = usage.total_tokens || 0;
+    return { answer, tokensUsed, toolCallsMade };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // AGENTIC PATH: iterative tool-calling with CRAG evaluation + retry
+  // ─────────────────────────────────────────────────────────────────────────────
+  private async agenticPath(
+    query: string,
+    chatHistory: { role: 'user' | 'assistant' | 'system'; content: string }[],
+    tokensUsed: number,
+    toolCallsMade: string[],
+    suggestedTools?: string[]
+  ): Promise<{ answer: string; tokensUsed: number; toolCallsMade: string[] }> {
+    // Build OpenAI-compatible function schemas for Groq function calling
+    const groqTools = this.tools.map((t) => ({
+      type: 'function' as const,
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'The search query or question' },
+            limit: { type: 'number', description: 'Max results to return (1-20)' },
+            entityName: { type: 'string', description: 'Entity name for graph traversal' },
+            maxHops: { type: 'number', description: 'Graph traversal depth (1-2)' },
+            documentId: { type: 'string', description: 'Document UUID for targeted search' },
+            sourceType: { type: 'string', description: 'Filter by source type (PDF, YOUTUBE, WEB_URL, etc.)' },
+          },
+          required: ['query'],
+        },
+      },
+    }));
+
+    const toolHint = suggestedTools?.length
+      ? `Suggested tools for this query: ${suggestedTools.join(', ')}.`
+      : '';
+
+    const messages: any[] = [
+      {
+        role: 'system',
+        content: `You are OmniScript Agent, an intelligent knowledge assistant. Use tools to retrieve information from the user's document workspace, then synthesize a comprehensive answer with citations [1], [2], etc.
+
+${toolHint}
+
+Strategy:
+- Start with vector_search for conceptual questions
+- Use keyword_search for exact terms, names, or IDs
+- Use hyde_search for complex or abstract questions
+- Use graph_traverse to find entity relationships
+- Use page_index_navigate for structure-specific questions
+- Cite all sources. Do not hallucinate.`,
+      },
+      ...chatHistory.slice(-5),
+      { role: 'user', content: query },
+    ];
+
+    let collectedChunks: Array<{ id: string; content: string }> = [];
+
+    for (let i = 0; i < ITERATION_LIMIT; i++) {
+      const response = await groq.chat.completions.create({
+        model: 'llama-3.3-70b-versatile',
+        messages,
+        tools: groqTools,
+        tool_choice: 'auto',
+        max_tokens: 2000,
+      });
+
+      const msg = response.choices[0]?.message;
+      if (!msg) break;
+
+      tokensUsed += response.usage?.total_tokens || 0;
+      messages.push(msg);
+
+      // Agent decided it has enough info — evaluate and finalize
+      if (!msg.tool_calls || msg.tool_calls.length === 0) {
+        // Final CRAG evaluation
+        if (collectedChunks.length > 0) {
+          const grade = await this.crag.evaluateRetrieval(query, collectedChunks.slice(0, 5));
+          logger.info({ grade, iteration: i + 1 }, 'CRAG final grade');
+
+          if (grade === 'IRRELEVANT' && i < ITERATION_LIMIT - 1) {
+            // Push agent to try harder
+            messages.push({
+              role: 'user',
+              content: 'The retrieved context does not seem relevant. Please try different search strategies — use hyde_search or graph_traverse — to find more relevant information.',
+            });
+            continue;
+          }
         }
+        return { answer: msg.content || '', tokensUsed, toolCallsMade };
+      }
+
+      // Execute tool calls
+      for (const toolCall of msg.tool_calls) {
+        const fnName = toolCall.function.name;
+        let fnArgs: Record<string, unknown>;
+        try {
+          fnArgs = JSON.parse(toolCall.function.arguments);
+        } catch {
+          fnArgs = { query };
+        }
+
+        toolCallsMade.push(fnName);
+        logger.info({ fnName, fnArgs }, 'Agent executing tool');
+
+        const tool = this.tools.find((t) => t.name === fnName);
+        let toolOutput = '';
+
+        if (tool) {
+          try {
+            const result = await tool.execute(fnArgs, this.context);
+            
+            // Truncate chunk content in tool output to prevent context overflow
+            let truncatedResult = result.data;
+            if (Array.isArray(truncatedResult)) {
+              truncatedResult = truncatedResult.map((item: any) => {
+                if (item.content && typeof item.content === 'string') {
+                  // Limit each chunk to 500 characters in the tool output
+                  return {
+                    ...item,
+                    content: item.content.length > 500 
+                      ? item.content.substring(0, 500) + '...[truncated]'
+                      : item.content
+                  };
+                }
+                return item;
+              });
+            }
+            
+            toolOutput = JSON.stringify({ ...result, data: truncatedResult });
+
+            // Collect chunks for CRAG evaluation (use full content for evaluation)
+            const data = result.data as any;
+            if (Array.isArray(data)) {
+              collectedChunks = [...collectedChunks, ...data.map((r: any) => ({ id: r.id || '', content: r.content || '' }))];
+            }
+          } catch (error) {
+            toolOutput = JSON.stringify({ error: String(error) });
+            logger.warn({ fnName, error }, 'Tool execution failed');
+          }
+        } else {
+          toolOutput = `Tool "${fnName}" not found in registry.`;
+        }
+
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          name: fnName,
+          content: toolOutput,
+        });
       }
     }
 
-    const citations: Citation[] = chunks.slice(0, 5).map((c, i) => ({
-      index: i + 1,
-      chunkId: c.id,
-      documentTitle: c.documentTitle,
-      sectionHeading: c.sectionHeading,
-      location: c.location,
-      score: c.score,
-    }));
+    // Force final answer after iteration limit
+    messages.push({
+      role: 'user',
+      content: 'Based on all the information you have gathered, please provide a comprehensive, well-cited final answer.',
+    });
+
+    const finalResponse = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages,
+      max_tokens: 2000,
+      temperature: 0.5,
+    });
+
+    tokensUsed += finalResponse.usage?.total_tokens || 0;
 
     return {
-      answer: fullResponse,
-      citations,
-      tokensUsed: totalTokens || 100 // Fallback
+      answer: finalResponse.choices[0]?.message?.content || 'Could not generate a final response.',
+      tokensUsed,
+      toolCallsMade,
     };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Helpers
+  // ─────────────────────────────────────────────────────────────────────────────
+  private async workspaceHasDocuments(): Promise<boolean> {
+    const count = await prisma.document.count({
+      where: { workspaceId: this.context.workspaceId, status: 'INDEXED' },
+    });
+    return count > 0;
   }
 }

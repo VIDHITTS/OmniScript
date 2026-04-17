@@ -60,7 +60,7 @@ export class WorkspaceController {
    */
   public getOne = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const workspace = await this.workspaceService.getWorkspaceById(req.params.id);
+      const workspace = await this.workspaceService.getWorkspaceById(req.params.id as string);
       res.status(200).json({ workspace });
     } catch (error) {
       next(error);
@@ -73,7 +73,7 @@ export class WorkspaceController {
   public update = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const updatedWorkspace = await this.workspaceService.updateWorkspace(
-        req.params.id,
+        req.params.id as string,
         req.body,
       );
       res.status(200).json({ message: "Workspace updated", workspace: updatedWorkspace });
@@ -90,7 +90,7 @@ export class WorkspaceController {
       const userId = req.user?.userId;
       if (!userId) throw AppError.unauthorized();
 
-      await this.workspaceService.deleteWorkspace(req.params.id, userId);
+      await this.workspaceService.deleteWorkspace(req.params.id as string as string, userId);
       res.status(200).json({ message: "Workspace deleted successfully" });
     } catch (error) {
       next(error);

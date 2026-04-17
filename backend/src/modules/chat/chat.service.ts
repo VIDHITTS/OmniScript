@@ -1,10 +1,13 @@
 import { prisma } from '../../config/db';
 import { groq } from '../../lib/groq';
-import { Embedder } from '../../lib/embedder';
-import { env } from '../../config/env';
+import { HybridRetriever } from '../../lib/retrieval';
+import { CrossEncoderReranker } from '../../lib/reranker';
 import { AppError } from '../../utils/AppError';
 import { logger } from '../../utils/logger';
+import { retryWithBackoff } from '../../utils/retry';
 import { CreateSessionInput, MessageListInput } from './chat.validation';
+import { Agent } from '../../agent/agent';
+import { RetrievedChunk } from '../../types';
 
 /**
  * ChatService — Business logic for chat sessions and AI-powered retrieval.
@@ -22,10 +25,12 @@ import { CreateSessionInput, MessageListInput } from './chat.validation';
  * - Tracks token_usage for cost monitoring
  */
 export class ChatService {
-  private embedder: Embedder;
+  private retriever: HybridRetriever;
+  private reranker: CrossEncoderReranker;
 
   constructor() {
-    this.embedder = new Embedder();
+    this.retriever = new HybridRetriever();
+    this.reranker = new CrossEncoderReranker();
   }
 
   /**
@@ -123,44 +128,52 @@ export class ChatService {
       },
     });
 
-    // 3. Retrieve relevant chunks from workspace
-    const chunks = await this.retrieveRelevantChunks(session.workspaceId, content);
-
-    // 4. Build conversation context (last 10 messages)
+    // 3. Build conversation context (last 10 messages)
     const previousMessages = await prisma.message.findMany({
       where: { sessionId },
       orderBy: { createdAt: 'desc' },
       take: 10,
       select: { role: true, content: true },
     });
+    
+    // Reverse the messages to correct chronological order
+    const chatHistory = previousMessages.reverse().map(m => ({ 
+      role: m.role.toLowerCase() as 'user' | 'assistant' | 'system', 
+      content: m.content 
+    }));
 
-    // 5. Generate AI response with citations
-    const { answer, citations, tokenUsage } = await this.generateAnswer(
-      content,
-      chunks,
-      previousMessages.reverse()
+    // 4. GENERATE AI RESPONSE VIA NEW ORCHESTRATION AGENT (with retry on rate limits)
+    const agent = new Agent({ workspaceId: session.workspaceId, userId });
+    
+    const { answer, tokensUsed, toolCallsMade } = await retryWithBackoff(
+      () => agent.evaluate(content, chatHistory),
+      {
+        maxRetries: 3,
+        initialDelayMs: 2000,
+        maxDelayMs: 10000,
+      }
     );
 
-    // 6. Store AI response
+    // 5. Store AI response
     const aiMessage = await prisma.message.create({
       data: {
         sessionId,
         role: 'ASSISTANT',
         content: answer,
-        citations: JSON.parse(JSON.stringify(citations)),
-        tokenUsage,
+        citations: [], // Citations are processed inside agent tools now
+        toolCalls: toolCallsMade // Save tool trajectory for UI display
       },
     });
 
-    // 7. Update session lastActiveAt
+    // 6. Update session lastActiveAt
     await prisma.chatSession.update({
       where: { id: sessionId },
       data: { lastActiveAt: new Date() },
     });
 
     logger.info(
-      { sessionId, chunksRetrieved: chunks.length, tokenUsage },
-      'AI response generated'
+      { sessionId, toolCallsMade, tokenUsage: tokensUsed },
+      'Agent response generated'
     );
 
     return { userMessage, aiMessage };
@@ -191,8 +204,9 @@ export class ChatService {
         data: { sessionId, userId, role: 'USER', content },
       });
 
-      // Retrieve relevant chunks
-      const chunks = await this.retrieveRelevantChunks(session.workspaceId, content);
+      // Retrieve relevant chunks — hybrid retrieval + Cohere reranking
+      const candidates = await this.retriever.retrieve(session.workspaceId, content, 50);
+      const chunks = await this.reranker.rerank(content, candidates, 5);
 
       // Build context
       const previousMessages = await prisma.message.findMany({
@@ -217,14 +231,21 @@ export class ChatService {
         { role: 'user', content },
       ];
 
-      // Stream from Groq
-      const stream = await groq.chat.completions.create({
-        model: "llama3-8b-8192",
-        messages,
-        max_tokens: 2000,
-        temperature: 0.7,
-        stream: true,
-      });
+      // Stream from Groq (with retry on rate limits)
+      const stream = await retryWithBackoff(
+        () => groq.chat.completions.create({
+          model: "llama-3.1-8b-instant",
+          messages,
+          max_tokens: 2000,
+          temperature: 0.7,
+          stream: true,
+        }),
+        {
+          maxRetries: 3,
+          initialDelayMs: 2000,
+          maxDelayMs: 10000,
+        }
+      );
 
       let fullResponse = '';
       let totalTokens = 0;
@@ -281,79 +302,6 @@ export class ChatService {
   // ===== Private Helpers =====
 
   /**
-   * Retrieve relevant chunks using full-text search.
-   * Phase 1: Simple content search (LIKE-based).
-   * Will upgrade to hybrid vector + BM25 with RRF when real embeddings are available.
-   */
-  private async retrieveRelevantChunks(workspaceId: string, query: string): Promise<RetrievedChunk[]> {
-    // Get all documents in workspace
-    const documents = await prisma.document.findMany({
-      where: { workspaceId, status: 'INDEXED' },
-      select: { id: true, title: true },
-    });
-
-    if (documents.length === 0) return [];
-
-    const documentIds = documents.map((d) => d.id);
-    const titleMap = new Map(documents.map((d) => [d.id, d.title]));
-
-    // Search chunks by content (case-insensitive keyword matching)
-    const queryWords = query.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
-
-    // For Phase 1: use Prisma's contains for basic search
-    // Will upgrade to raw SQL with tsvector + cosine for production
-    const allChunks = await prisma.documentChunk.findMany({
-      where: {
-        documentId: { in: documentIds },
-      },
-      select: {
-        id: true,
-        content: true,
-        contextualizedContent: true,
-        chunkIndex: true,
-        sectionHeading: true,
-        location: true,
-        documentId: true,
-        tokenCount: true,
-      },
-      take: 100, // Get a pool of candidates
-    });
-
-    // Score chunks by keyword overlap
-    const scored = allChunks.map((chunk) => {
-      const contentLower = (chunk.content + ' ' + (chunk.contextualizedContent || '')).toLowerCase();
-      let score = 0;
-      for (const word of queryWords) {
-        if (contentLower.includes(word)) {
-          score += 1;
-          // Bonus for exact phrase matches
-          if (contentLower.includes(query.toLowerCase())) {
-            score += 2;
-          }
-        }
-      }
-      return { ...chunk, score, documentTitle: titleMap.get(chunk.documentId) || 'Unknown' };
-    });
-
-    // Sort by score and take top 5
-    const topChunks = scored
-      .filter((c) => c.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 5);
-
-    // If no keyword matches, return the first few chunks as fallback
-    if (topChunks.length === 0 && allChunks.length > 0) {
-      return allChunks.slice(0, 3).map((c) => ({
-        ...c,
-        score: 0,
-        documentTitle: titleMap.get(c.documentId) || 'Unknown',
-      }));
-    }
-
-    return topChunks;
-  }
-
-  /**
    * Generate AI answer with citations (non-streaming).
    */
   private async generateAnswer(
@@ -377,7 +325,7 @@ export class ChatService {
     ];
 
     const response = await groq.chat.completions.create({
-      model: "llama3-8b-8192",
+      model: "llama-3.1-8b-instant",
       messages,
       max_tokens: 2000,
       temperature: 0.7,
@@ -417,16 +365,53 @@ RULES:
 CONTEXT FROM USER'S DOCUMENTS:
 ${contextText}`;
   }
-}
+  /**
+   * Branch a conversation at a specific message point.
+   * Creates a new session with all messages up to and including the branch point.
+   */
+  public async branchSession(userId: string, sessionId: string, messageId: string) {
+    const originalSession = await prisma.chatSession.findUnique({
+      where: { id: sessionId },
+    });
+    if (!originalSession) throw AppError.notFound('Original chat session not found.');
 
-interface RetrievedChunk {
-  id: string;
-  content: string;
-  contextualizedContent: string | null;
-  chunkIndex: number;
-  sectionHeading: string | null;
-  location: unknown;
-  documentId: string;
-  documentTitle: string;
-  score: number;
+    const branchMessage = await prisma.message.findUnique({ where: { id: messageId } });
+    if (!branchMessage || branchMessage.sessionId !== sessionId) {
+      throw AppError.badRequest('Branch message not found in this session.');
+    }
+
+    // Fetch all messages up to and including the branch point (ordered asc)
+    const allMessages = await prisma.message.findMany({
+      where: { sessionId },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true, role: true, content: true, citations: true, tokenUsage: true },
+    });
+
+    // Include messages up to and including the branch message
+    const cutIndex = allMessages.findIndex((m) => m.id === messageId);
+    const messagesToCopy = allMessages.slice(0, cutIndex + 1);
+
+    const branchedSession = await prisma.chatSession.create({
+      data: {
+        workspaceId: originalSession.workspaceId,
+        userId,
+        title: `Branch: ${originalSession.title}`,
+        parentSessionId: sessionId,
+        messages: {
+          createMany: {
+            data: messagesToCopy.map((m) => ({
+              userId,
+              role: m.role,
+              content: m.content,
+              citations: m.citations as any,
+              tokenUsage: m.tokenUsage,
+            })),
+          },
+        },
+      },
+    });
+
+    logger.info({ sessionId, branchedSessionId: branchedSession.id, messageId }, 'Session branched');
+    return branchedSession;
+  }
 }

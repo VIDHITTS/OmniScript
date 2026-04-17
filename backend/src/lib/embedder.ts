@@ -80,9 +80,14 @@ export async function enrichChunkContext(
   documentTitle: string,
   sectionHeading: string
 ): Promise<string> {
+  // Skip enrichment if chunk is too short
+  if (chunk.length < 50) {
+    return chunk;
+  }
+
   try {
     const response = await groq.chat.completions.create({
-      model: "llama3-8b-8192",
+      model: "llama-3.1-8b-instant",
       messages: [
         {
           role: 'system',
@@ -90,7 +95,7 @@ export async function enrichChunkContext(
         },
         {
           role: 'user',
-          content: `Document: "${documentTitle}"\nSection: "${sectionHeading}"\n\nChunk:\n${chunk}\n\nProvide 1-2 sentences of context:`,
+          content: `Document: "${documentTitle}"\nSection: "${sectionHeading}"\n\nChunk:\n${chunk.substring(0, 500)}\n\nProvide 1-2 sentences of context:`,
         },
       ],
       max_tokens: 100,
@@ -100,7 +105,7 @@ export async function enrichChunkContext(
     const context = response.choices[0]?.message?.content?.trim() || '';
     return context ? `${context}\n\n${chunk}` : chunk;
   } catch (error) {
-    logger.warn({ error }, 'Failed to generate contextual enrichment, using original chunk');
+    logger.warn({ error: error instanceof Error ? error.message : String(error) }, 'Failed to generate contextual enrichment, using original chunk');
     return chunk;
   }
 }

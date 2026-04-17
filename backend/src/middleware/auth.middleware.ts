@@ -36,6 +36,10 @@ export const authenticateToken = (
     req.user = decoded;
     next();
   } catch (error) {
-    next(new AppError(403, "Forbidden: Invalid or expired token."));
+    if (error instanceof jwt.TokenExpiredError) {
+      next(new AppError(401, 'Unauthorized: Token expired.'));
+    } else {
+      next(new AppError(401, 'Unauthorized: Invalid token.'));
+    }
   }
 };

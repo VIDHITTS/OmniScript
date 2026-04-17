@@ -20,7 +20,7 @@ export class WorkspaceService {
         name: input.name,
         description: input.description,
         ownerId: userId,
-        template: input.template,
+        template: input.template as any,
         members: {
           create: {
             userId,

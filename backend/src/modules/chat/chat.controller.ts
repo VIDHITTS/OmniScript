@@ -56,7 +56,7 @@ export class ChatController {
    */
   public getMessages = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { sessionId } = req.params;
+      const sessionId = req.params.sessionId as string;
       const cursor = req.query.cursor as string | undefined;
       const take = Number(req.query.take) || 50;
 
@@ -76,7 +76,7 @@ export class ChatController {
       const userId = req.user?.userId;
       if (!userId) throw AppError.unauthorized();
 
-      const { sessionId } = req.params;
+      const sessionId = req.params.sessionId as string;
       const { content } = req.body;
 
       const result = await this.chatService.sendMessage(userId, sessionId, content);
@@ -95,7 +95,7 @@ export class ChatController {
       const userId = req.user?.userId;
       if (!userId) throw AppError.unauthorized();
 
-      const { sessionId } = req.params;
+      const sessionId = req.params.sessionId as string;
       const { content } = req.body;
 
       if (!content) {
@@ -143,7 +143,7 @@ export class ChatController {
       const userId = req.user?.userId;
       if (!userId) throw AppError.unauthorized();
 
-      const { sessionId } = req.params;
+      const sessionId = req.params.sessionId as string;
       const { messageId } = req.body;
 
       if (!messageId) {

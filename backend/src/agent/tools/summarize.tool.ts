@@ -31,7 +31,12 @@ export const SummarizeTool = buildTool({
 
     if (chunks.length === 0) {
       return {
-        data: { summary: 'No content found for the specified document/section.' },
+        data: {
+          summary: 'No content found for the specified document/section.',
+          documentTitle: '',
+          sectionHeading: undefined,
+          chunksProcessed: 0,
+        },
         confidence: 0,
       };
     }
@@ -48,6 +53,7 @@ export const SummarizeTool = buildTool({
       contentText += `[${chunk.sectionHeading || 'Section'}]\n${chunk.content}\n\n`;
     }
 
+    const maxLengthKey = maxLength || 'medium';
     const maxTokenMap = { brief: 150, medium: 400, detailed: 800 };
 
     const response = await groq.chat.completions.create({
@@ -55,14 +61,14 @@ export const SummarizeTool = buildTool({
       messages: [
         {
           role: 'system',
-          content: `Summarize the following document content. Provide a ${maxLength} summary that captures the key points, findings, and conclusions. Use clear, structured formatting.`,
+          content: `Summarize the following document content. Provide a ${maxLengthKey} summary that captures the key points, findings, and conclusions. Use clear, structured formatting.`,
         },
         {
           role: 'user',
           content: `Document: "${doc?.title || 'Untitled'}"\n${sectionHeading ? `Section: "${sectionHeading}"\n` : ''}\n\n${contentText}`,
         },
       ],
-      max_tokens: maxTokenMap[maxLength],
+      max_tokens: maxTokenMap[maxLengthKey],
       temperature: 0.3,
     });
 
@@ -71,8 +77,8 @@ export const SummarizeTool = buildTool({
     return {
       data: {
         summary,
-        documentTitle: doc?.title,
-        sectionHeading: sectionHeading || null,
+        documentTitle: doc?.title || '',
+        sectionHeading: sectionHeading || undefined,
         chunksProcessed: chunks.length,
       },
       confidence: 0.85,

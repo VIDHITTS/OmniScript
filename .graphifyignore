@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+backend/node_modules/
+.graphify-venv/
+
+# Build and generated output
+dist/
+build/
+coverage/
+frontend/.next/
+frontend/out/
+frontend/build/
+backend/dist/
+backend/src/generated/
+
+# graphify output and caches
+graphify-out/
+.graphify_detect.json
+.graphify_ast.json
+.graphify_cached.json
+.graphify_uncached.txt
+
+# Local environment and secrets
+.env
+.env.*
+*.pem
+
+# Logs and machine files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
+
+# Large local references already excluded from git
+ref/

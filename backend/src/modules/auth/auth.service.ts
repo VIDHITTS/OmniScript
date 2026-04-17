@@ -3,7 +3,7 @@ import jwt from "jsonwebtoken";
 import { prisma } from "../../config/db";
 import { env } from "../../config/env";
 import { AppError } from "../../utils/AppError";
-import { redis } from "../../lib/redis";
+import crypto from "crypto";
 
 export class AuthService {
   /**
@@ -92,11 +92,31 @@ export class AuthService {
         email: string;
       };
 
-      const storedToken = await redis.get(`refresh_token:${decoded.userId}`);
-      if (storedToken !== oldRefreshToken) {
+      // Hash the token to compare with stored hash
+      const hashedToken = crypto
+        .createHash("sha256")
+        .update(oldRefreshToken)
+        .digest("hex");
+
+      // Find the stored token in PostgreSQL
+      const storedToken = await prisma.refreshToken.findFirst({
+        where: {
+          userId: decoded.userId,
+          token: hashedToken,
+          expiresAt: { gte: new Date() },
+        },
+      });
+
+      if (!storedToken) {
         throw new AppError(401, "Invalid or expired refresh token");
       }
 
+      // Delete the old token
+      await prisma.refreshToken.delete({
+        where: { id: storedToken.id },
+      });
+
+      // Generate and store new tokens
       const { accessToken, refreshToken } = this.generateTokens(
         decoded.userId,
         decoded.email,
@@ -110,12 +130,14 @@ export class AuthService {
   }
 
   public async logoutUser(userId: string) {
-    await redis.del(`refresh_token:${userId}`);
+    await prisma.refreshToken.deleteMany({
+      where: { userId },
+    });
   }
 
   private generateTokens(userId: string, email: string) {
     const accessToken = jwt.sign({ userId, email }, env.JWT_SECRET, {
-      expiresIn: "15m",
+      expiresIn: "2h",
     });
     const refreshToken = jwt.sign({ userId, email }, env.JWT_REFRESH_SECRET, {
       expiresIn: "7d",
@@ -124,6 +146,19 @@ export class AuthService {
   }
 
   private async storeRefreshToken(userId: string, token: string) {
-    await redis.set(`refresh_token:${userId}`, token, "EX", 7 * 24 * 60 * 60);
+    // Hash the token before storing
+    const hashedToken = crypto
+      .createHash("sha256")
+      .update(token)
+      .digest("hex");
+
+    // Store in PostgreSQL with 7-day expiration
+    await prisma.refreshToken.create({
+      data: {
+        userId,
+        token: hashedToken,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      },
+    });
   }
 }

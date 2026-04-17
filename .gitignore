@@ -23,6 +23,14 @@ Thumbs.db
 *.log
 npm-debug.log*
 
+# graphify
+graphify-out/
+.graphify-venv/
+.graphify_detect.json
+.graphify_ast.json
+.graphify_cached.json
+.graphify_uncached.txt
+
 # Docker
 docker-compose.override.yml
 

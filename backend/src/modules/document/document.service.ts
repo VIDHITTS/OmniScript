@@ -76,7 +76,15 @@ export class DocumentService {
     const results = hasMore ? documents.slice(0, take) : documents;
     const nextCursor = hasMore ? results[results.length - 1].id : null;
 
-    return { documents: results, nextCursor, hasMore };
+    // BigInt (fileSizeBytes) cannot be JSON-serialized — convert to Number
+    const serialized = results.map((d) => ({
+      ...d,
+      fileSizeBytes: d.fileSizeBytes !== null && d.fileSizeBytes !== undefined
+        ? Number(d.fileSizeBytes)
+        : null,
+    }));
+
+    return { documents: serialized, nextCursor, hasMore };
   }
 
   /**

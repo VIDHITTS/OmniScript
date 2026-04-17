@@ -33,7 +33,12 @@ export const CompareTool = buildTool({
 
     if (!doc1 || !doc2) {
       return {
-        data: { comparison: 'One or both documents not found.' },
+        data: {
+          comparison: 'One or both documents not found.',
+          documentA: '',
+          documentB: '',
+          focusArea: undefined,
+        },
         confidence: 0,
       };
     }
@@ -90,7 +95,7 @@ export const CompareTool = buildTool({
         comparison,
         documentA: doc1.title,
         documentB: doc2.title,
-        focusArea: focusArea || null,
+        focusArea: focusArea || undefined,
       },
       confidence: 0.8,
     };

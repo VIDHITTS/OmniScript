@@ -30,7 +30,7 @@ export function validate(schema: ZodSchema, target: ValidationTarget = "body") {
     }
 
     // Replace raw data with parsed + validated data
-    (req as Record<string, unknown>)[target] = result.data;
+    (req as any)[target] = result.data;
     next();
   };
 }
@@ -56,7 +56,7 @@ export function validateMultiple(
         next(result.error);
         return;
       }
-      (req as Record<string, unknown>)[target] = result.data;
+      (req as any)[target] = result.data;
     }
     next();
   };

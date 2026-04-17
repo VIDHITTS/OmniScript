@@ -75,7 +75,7 @@ export const GraphTraversalTool = buildTool({
         graphResult.push(node);
         
         // Hop 2
-        if (maxHops > 1) {
+        if (maxHops && maxHops > 1) {
           node.hop2_connections = [];
           
           for (const edge of entity.sourceEdges) {

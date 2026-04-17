@@ -1,5 +1,4 @@
 import { logger } from "../utils/logger";
-import { redis } from "../lib/redis";
 import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
@@ -11,7 +10,7 @@ async function startWorkers() {
   const gracefulShutdown = async (signal: string) => {
     logger.info({ signal }, "Received shutdown signal, closing workers");
 
-    await redis.quit();
+    // Redis shutdown removed - no longer using Redis
     await prisma.$disconnect();
 
     logger.info("Workers closed. Exiting process.");

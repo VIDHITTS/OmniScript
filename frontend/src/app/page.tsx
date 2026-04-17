@@ -1,192 +1,990 @@
 "use client";
 
+import { apiClient, uploadClient } from "@/lib/api";
 import { useStore } from "@/store/useStore";
-import { CopyPlus, FileText, Lock, Plus, UploadCloud } from "lucide-react";
-import { useState, useEffect } from "react";
+import {
+  AlertCircle,
+  ArrowUp,
+  BookOpen,
+  CheckCircle2,
+  Database,
+  FileText,
+  FolderPlus,
+  Loader2,
+  Lock,
+  LogOut,
+  MessageSquare,
+  Plus,
+  Search,
+  ShieldCheck,
+  Upload,
+} from "lucide-react";
+import {
+  FormEvent,
+  ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+
+type Workspace = {
+  id: string;
+  name: string;
+  description?: string | null;
+  template?: string;
+  createdAt?: string;
+  _count?: {
+    documents?: number;
+    members?: number;
+    chatSessions?: number;
+  };
+};
+
+type DocumentItem = {
+  id: string;
+  title: string;
+  originalFilename: string;
+  sourceType: string;
+  status: string;
+  totalChunks: number;
+  tokenCount: number;
+  createdAt: string;
+  processedAt?: string | null;
+  errorMessage?: string | null;
+};
+
+type ChatSession = {
+  id: string;
+  title: string;
+  lastActiveAt: string;
+  _count?: {
+    messages?: number;
+  };
+};
+
+type Message = {
+  id: string;
+  role: "USER" | "ASSISTANT" | "SYSTEM" | "TOOL";
+  content: string;
+  citations?: unknown;
+  createdAt?: string;
+};
+
+type Mode = "login" | "register";
+
+const emptyWorkspace = {
+  name: "",
+  description: "",
+};
+
+const sourceTypeForFile = (file: File | null) => {
+  const name = file?.name.toLowerCase() || "";
+  if (name.endsWith(".pdf")) return "PDF";
+  if (name.endsWith(".md") || name.endsWith(".markdown")) return "MARKDOWN";
+  if (name.endsWith(".csv")) return "CSV";
+  if (name.match(/\.(png|jpg|jpeg|webp|gif)$/)) return "IMAGE";
+  if (name.match(/\.(mp3|wav|m4a|aac)$/)) return "AUDIO";
+  if (name.match(/\.(ts|tsx|js|jsx|py|go|rs|java|cpp|c|json|yaml|yml)$/)) {
+    return "CODE";
+  }
+  return "TEXT";
+};
+
+const shortDate = (value?: string | null) => {
+  if (!value) return "Not processed";
+  return new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+};
 
 export default function Home() {
   const {
-    guestWorkspaceId,
-    guestWorkspaceName,
-    guestDocumentTitle,
-    createGuestWorkspace,
-    uploadGuestDocument,
+    accessToken,
+    user,
+    activeWorkspaceId,
+    activeSessionId,
+    setAuth,
+    setActiveWorkspace,
+    setActiveSession,
+    logout,
   } = useStore();
-  const [workspaceName, setWorkspaceName] = useState("");
-  const [fileName, setFileName] = useState("");
-  const [isMounted, setIsMounted] = useState(false);
-  const [isDragging, setIsDragging] = useState(false);
 
-  useEffect(() => {
-    setIsMounted(true);
+  const [mounted, setMounted] = useState(false);
+  const [mode, setMode] = useState<Mode>("login");
+  const [authForm, setAuthForm] = useState({
+    fullName: "",
+    email: "",
+    password: "",
+  });
+  const [workspaceForm, setWorkspaceForm] = useState(emptyWorkspace);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [documents, setDocuments] = useState<DocumentItem[]>([]);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [documentTitle, setDocumentTitle] = useState("");
+  const [documentUrl, setDocumentUrl] = useState("");
+  const [uploadMode, setUploadMode] = useState<"file" | "url">("file");
+  const [sessionTitle, setSessionTitle] = useState("");
+  const [prompt, setPrompt] = useState("");
+  const [status, setStatus] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState({
+    auth: false,
+    workspace: false,
+    upload: false,
+    chat: false,
+    boot: false,
+  });
+
+  const activeWorkspace = useMemo(
+    () => workspaces.find((workspace) => workspace.id === activeWorkspaceId),
+    [activeWorkspaceId, workspaces],
+  );
+
+  const isAuthenticated = Boolean(accessToken && user);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const withErrorHandling = useCallback(async (task: () => Promise<void>) => {
+    setError("");
+    setStatus("");
+    try {
+      await task();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unexpected error.");
+    }
   }, []);
 
-  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    setIsDragging(true);
-  };
+  const loadWorkspaces = useCallback(async (token = accessToken) => {
+    setLoading((current) => ({ ...current, boot: true }));
+    await withErrorHandling(async () => {
+      const result = await apiClient("/workspaces", { token });
+      setWorkspaces(result.workspaces || []);
+      if (!activeWorkspaceId && result.workspaces?.[0]?.id) {
+        setActiveWorkspace(result.workspaces[0].id);
+      }
+    });
+    setLoading((current) => ({ ...current, boot: false }));
+  }, [accessToken, activeWorkspaceId, setActiveWorkspace, withErrorHandling]);
 
-  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    setIsDragging(false);
-  };
-
-  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    setIsDragging(false);
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      setFileName(e.dataTransfer.files[0].name);
+  const loadDocuments = useCallback(async (workspaceId: string) => {
+    try {
+      const result = await apiClient(`/workspaces/${workspaceId}/documents`, {
+        token: accessToken,
+      });
+      setDocuments(result.documents || []);
+    } catch {
+      // Silently fail — stale state is better than crashing the poll
     }
+  }, [accessToken]);
+
+  const loadSessions = useCallback(async (workspaceId: string) => {
+    try {
+      const result = await apiClient(`/workspaces/${workspaceId}/chat/sessions`, {
+        token: accessToken,
+      });
+      setSessions(result.sessions || []);
+      if (!activeSessionId && result.sessions?.[0]?.id) {
+        setActiveSession(result.sessions[0].id);
+      }
+    } catch {
+      // Silently fail
+    }
+  }, [accessToken, activeSessionId, setActiveSession]);
+
+  const loadMessages = useCallback(async (workspaceId: string, sessionId: string) => {
+    const result = await apiClient(
+      `/workspaces/${workspaceId}/chat/sessions/${sessionId}/messages`,
+      { token: accessToken },
+    );
+    setMessages(result.messages || []);
+  }, [accessToken]);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!mounted || accessToken || !user) return;
+    void apiClient("/auth/refresh", { method: "POST" })
+      .then((result) => setAuth(result.accessToken, user))
+      .catch(() => {
+        logout();
+        setError("Your session expired. Please log in again.");
+      });
+  }, [mounted, accessToken, user, setAuth, logout]);
+
+  useEffect(() => {
+    if (!mounted || !accessToken) return;
+    void loadWorkspaces();
+  }, [mounted, accessToken, loadWorkspaces]);
+
+  useEffect(() => {
+    if (!mounted || !accessToken || !activeWorkspaceId) return;
+    void Promise.all([loadDocuments(activeWorkspaceId), loadSessions(activeWorkspaceId)]);
+  }, [
+    mounted,
+    accessToken,
+    activeWorkspaceId,
+    loadDocuments,
+    loadSessions,
+  ]);
+
+  // Poll document status while any doc is still processing
+  useEffect(() => {
+    const hasInFlight = documents.some(
+      (d) => d.status === "QUEUED" || d.status === "PROCESSING" || d.status === "CHUNKING" || d.status === "EMBEDDING"
+    );
+
+    if (hasInFlight && activeWorkspaceId && accessToken) {
+      if (!pollRef.current) {
+        pollRef.current = setInterval(() => {
+          void loadDocuments(activeWorkspaceId);
+        }, 5000);
+      }
+    } else {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    }
+
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, [documents, activeWorkspaceId, accessToken, loadDocuments]);
+
+  useEffect(() => {
+    if (!mounted || !accessToken || !activeWorkspaceId || !activeSessionId) return;
+    void loadMessages(activeWorkspaceId, activeSessionId);
+  }, [mounted, accessToken, activeWorkspaceId, activeSessionId, loadMessages]);
+
+  const submitAuth = async (event: FormEvent) => {
+    event.preventDefault();
+    setLoading((current) => ({ ...current, auth: true }));
+    await withErrorHandling(async () => {
+      const body =
+        mode === "register"
+          ? authForm
+          : { email: authForm.email, password: authForm.password };
+      const result = await apiClient(`/auth/${mode}`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      setAuth(result.accessToken, result.user);
+      setStatus(mode === "register" ? "Account created." : "Signed in.");
+      await loadWorkspaces(result.accessToken);
+    });
+    setLoading((current) => ({ ...current, auth: false }));
   };
 
-  if (!isMounted) return null; // Hydration fix
+  const submitWorkspace = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!workspaceForm.name.trim()) return;
+
+    setLoading((current) => ({ ...current, workspace: true }));
+    await withErrorHandling(async () => {
+      const result = await apiClient("/workspaces", {
+        method: "POST",
+        token: accessToken,
+        body: JSON.stringify({
+          name: workspaceForm.name.trim(),
+          description: workspaceForm.description.trim() || undefined,
+          template: "RESEARCH",
+        }),
+      });
+      const nextWorkspace = result.workspace;
+      setWorkspaces((current) => [nextWorkspace, ...current]);
+      setActiveWorkspace(nextWorkspace.id);
+      setWorkspaceForm(emptyWorkspace);
+      setStatus("Workspace created.");
+    });
+    setLoading((current) => ({ ...current, workspace: false }));
+  };
+
+  const submitDocument = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!activeWorkspaceId) return;
+
+    setLoading((current) => ({ ...current, upload: true }));
+    await withErrorHandling(async () => {
+      if (uploadMode === "url") {
+        // URL-based source (WEB_URL or YOUTUBE)
+        if (!documentUrl.trim()) return;
+        const isYoutube = documentUrl.includes("youtube.com") || documentUrl.includes("youtu.be");
+        const sourceType = isYoutube ? "YOUTUBE" : "WEB_URL";
+        await apiClient(`/workspaces/${activeWorkspaceId}/documents`, {
+          method: "POST",
+          token: accessToken,
+          body: JSON.stringify({
+            title: documentTitle.trim() || documentUrl,
+            sourceType,
+            url: documentUrl.trim(),
+          }),
+        });
+        setDocumentUrl("");
+        setDocumentTitle("");
+      } else {
+        // File-based source
+        if (!selectedFile) return;
+        const formData = new FormData();
+        formData.append("file", selectedFile);
+        formData.append("title", documentTitle.trim() || selectedFile.name);
+        formData.append("sourceType", sourceTypeForFile(selectedFile));
+        await uploadClient(`/workspaces/${activeWorkspaceId}/documents`, formData, accessToken);
+        setSelectedFile(null);
+        setDocumentTitle("");
+      }
+      setStatus("Document queued for processing.");
+      await loadDocuments(activeWorkspaceId);
+      await loadWorkspaces();
+    });
+    setLoading((current) => ({ ...current, upload: false }));
+  };
+
+  const handleDeleteDocument = async (documentId: string) => {
+    if (!activeWorkspaceId) return;
+    await withErrorHandling(async () => {
+      await apiClient(`/workspaces/${activeWorkspaceId}/documents/${documentId}`, {
+        method: "DELETE",
+        token: accessToken,
+      });
+      setDocuments((current) => current.filter((d) => d.id !== documentId));
+    });
+  };
+
+  const createSession = async () => {
+    if (!activeWorkspaceId) return;
+
+    setLoading((current) => ({ ...current, chat: true }));
+    await withErrorHandling(async () => {
+      const result = await apiClient(
+        `/workspaces/${activeWorkspaceId}/chat/sessions`,
+        {
+          method: "POST",
+          token: accessToken,
+          body: JSON.stringify({
+            title: sessionTitle.trim() || "Research chat",
+          }),
+        },
+      );
+      setSessions((current) => [result.session, ...current]);
+      setActiveSession(result.session.id);
+      setMessages([]);
+      setSessionTitle("");
+      setStatus("Chat session ready.");
+    });
+    setLoading((current) => ({ ...current, chat: false }));
+  };
+
+  const sendMessage = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!activeWorkspaceId || !activeSessionId || !prompt.trim()) return;
+
+    const content = prompt.trim();
+    setPrompt("");
+    setLoading((current) => ({ ...current, chat: true }));
+    await withErrorHandling(async () => {
+      const optimistic: Message = {
+        id: `local-${Date.now()}`,
+        role: "USER",
+        content,
+      };
+      setMessages((current) => [...current, optimistic]);
+      const result = await apiClient(
+        `/workspaces/${activeWorkspaceId}/chat/sessions/${activeSessionId}/messages`,
+        {
+          method: "POST",
+          token: accessToken,
+          body: JSON.stringify({ content }),
+        },
+      );
+      setMessages((current) => [
+        ...current.filter((message) => message.id !== optimistic.id),
+        result.userMessage,
+        result.aiMessage,
+      ]);
+      await loadSessions(activeWorkspaceId);
+    });
+    setLoading((current) => ({ ...current, chat: false }));
+  };
+
+  const handleLogout = async () => {
+    await withErrorHandling(async () => {
+      if (accessToken) {
+        await apiClient("/auth/logout", {
+          method: "POST",
+          token: accessToken,
+        }).catch(() => null);
+      }
+      logout();
+      setWorkspaces([]);
+      setDocuments([]);
+      setSessions([]);
+      setMessages([]);
+      setStatus("Signed out.");
+    });
+  };
+
+  if (!mounted) return null;
+
+  if (user && !accessToken) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-background px-6 text-foreground">
+        <div className="rounded-lg border border-border bg-surface p-6 text-center shadow-sm">
+          <Loader2 className="mx-auto h-6 w-6 animate-spin text-primary" />
+          <p className="mt-3 text-sm text-muted">Restoring secure session</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <main className="min-h-screen bg-background text-foreground">
+        <div className="mx-auto grid min-h-screen w-full max-w-6xl gap-10 px-6 py-8 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
+          <section className="space-y-8">
+            <div className="inline-flex items-center gap-2 rounded-md border border-border bg-surface px-3 py-2 text-sm font-medium text-muted">
+              <ShieldCheck className="h-4 w-4 text-primary" />
+              Private knowledge workspaces
+            </div>
+
+            <div className="space-y-5">
+              <h1 className="max-w-3xl text-4xl font-semibold tracking-tight text-foreground sm:text-6xl">
+                OmniScript turns documents into a working knowledge system.
+              </h1>
+              <p className="max-w-2xl text-lg leading-8 text-muted">
+                Upload source material, let the backend process it, then ask
+                focused questions with workspace-scoped retrieval and citations.
+              </p>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-3">
+              {[
+                ["Ingest", "PDF, text, code, audio, image and web sources."],
+                ["Organize", "Secure workspaces with isolated document sets."],
+                ["Ask", "Chat sessions built on the indexed knowledge base."],
+              ].map(([title, copy]) => (
+                <div
+                  key={title}
+                  className="rounded-lg border border-border bg-surface p-4"
+                >
+                  <p className="font-semibold text-foreground">{title}</p>
+                  <p className="mt-2 text-sm leading-6 text-muted">{copy}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-border bg-surface p-6 shadow-sm">
+            <div className="mb-6 flex rounded-md border border-border bg-subtle p-1">
+              {(["login", "register"] as Mode[]).map((item) => (
+                <button
+                  key={item}
+                  onClick={() => setMode(item)}
+                  className={`h-10 flex-1 rounded-md text-sm font-semibold transition ${
+                    mode === item
+                      ? "bg-surface text-foreground shadow-sm"
+                      : "text-muted hover:text-foreground"
+                  }`}
+                >
+                  {item === "login" ? "Log in" : "Create account"}
+                </button>
+              ))}
+            </div>
+
+            <form className="space-y-4" onSubmit={submitAuth}>
+              {mode === "register" && (
+                <label className="block">
+                  <span className="text-sm font-medium text-foreground">Full name</span>
+                  <input
+                    className="mt-2 h-11 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none focus:border-primary"
+                    value={authForm.fullName}
+                    onChange={(event) =>
+                      setAuthForm((current) => ({
+                        ...current,
+                        fullName: event.target.value,
+                      }))
+                    }
+                    placeholder="Ada Lovelace"
+                    minLength={2}
+                    required
+                  />
+                </label>
+              )}
+
+              <label className="block">
+                <span className="text-sm font-medium text-foreground">Email</span>
+                <input
+                  className="mt-2 h-11 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none focus:border-primary"
+                  value={authForm.email}
+                  onChange={(event) =>
+                    setAuthForm((current) => ({
+                      ...current,
+                      email: event.target.value,
+                    }))
+                  }
+                  placeholder="you@example.com"
+                  type="email"
+                  required
+                />
+              </label>
+
+              <label className="block">
+                <span className="text-sm font-medium text-foreground">Password</span>
+                <input
+                  className="mt-2 h-11 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none focus:border-primary"
+                  value={authForm.password}
+                  onChange={(event) =>
+                    setAuthForm((current) => ({
+                      ...current,
+                      password: event.target.value,
+                    }))
+                  }
+                  placeholder={mode === "register" ? "At least 8 characters" : "Your password"}
+                  type="password"
+                  minLength={mode === "register" ? 8 : 1}
+                  required
+                />
+              </label>
+
+              <button
+                className="flex h-11 w-full items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={loading.auth}
+              >
+                {loading.auth ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
+                {mode === "login" ? "Log in" : "Create secure account"}
+              </button>
+            </form>
+
+            <Feedback error={error} status={status} />
+          </section>
+        </div>
+      </main>
+    );
+  }
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center p-6 border-box sm:p-24 relative overflow-hidden bg-background text-foreground">
-      {/* Warm Background Graphic Element without pure gradients */}
-      <div className="absolute top-0 -z-10 w-full h-[50vh] bg-[var(--background-alt)] dark:bg-[var(--background-alt)] opacity-50" />
-
-      <div className="w-full max-w-3xl text-center space-y-6 z-10">
-        <div className="inline-flex items-center justify-center p-4 rounded-full bg-white dark:bg-[#1f1e1a] border border-gray-200 dark:border-[#383631] shadow-sm mb-4">
-          <CopyPlus className="w-10 h-10 sm:w-14 sm:h-14 text-[var(--accent)]" />
+    <main className="min-h-screen bg-background text-foreground">
+      <header className="border-b border-border bg-surface">
+        <div className="mx-auto flex max-w-7xl flex-col gap-4 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-medium text-muted">OmniScript</p>
+            <h1 className="text-2xl font-semibold tracking-tight">
+              Knowledge workspace
+            </h1>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="hidden rounded-md border border-border px-3 py-2 text-sm text-muted sm:block">
+              {user?.fullName}
+            </div>
+            <button
+              onClick={handleLogout}
+              className="inline-flex h-10 items-center gap-2 rounded-md border border-border bg-surface px-3 text-sm font-semibold text-foreground hover:bg-subtle"
+            >
+              <LogOut className="h-4 w-4" />
+              Sign out
+            </button>
+          </div>
         </div>
+      </header>
 
-        <h1 className="text-5xl sm:text-7xl font-bold tracking-tight text-[var(--foreground)]">
-          Omni<span className="text-[var(--muted)]">Script</span>
-        </h1>
+      <div className="mx-auto grid max-w-7xl gap-5 px-5 py-5 lg:grid-cols-[280px_1fr]">
+        <aside className="space-y-5">
+          <section className="rounded-lg border border-border bg-surface p-4">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="font-semibold">Workspaces</h2>
+              {loading.boot && <Loader2 className="h-4 w-4 animate-spin text-muted" />}
+            </div>
 
-        <p className="text-xl sm:text-2xl text-[var(--muted)] max-w-2xl mx-auto mt-6">
-          The AI-powered knowledge operating system. Ingest, organize, search,
-          and converse with your data.
-        </p>
+            <div className="space-y-2">
+              {workspaces.map((workspace) => (
+                <button
+                  key={workspace.id}
+                  onClick={() => setActiveWorkspace(workspace.id)}
+                  className={`w-full rounded-md border px-3 py-3 text-left transition ${
+                    activeWorkspaceId === workspace.id
+                      ? "border-primary bg-subtle"
+                      : "border-border bg-surface hover:bg-subtle"
+                  }`}
+                >
+                  <span className="block text-sm font-semibold text-foreground">
+                    {workspace.name}
+                  </span>
+                  <span className="mt-1 block text-xs text-muted">
+                    {workspace._count?.documents || 0} documents
+                  </span>
+                </button>
+              ))}
+              {workspaces.length === 0 && (
+                <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted">
+                  Create a workspace to start indexing sources.
+                </p>
+              )}
+            </div>
+          </section>
 
-        {/* WORKFLOW CONTAINER */}
-        <div className="mt-16 w-full bg-white dark:bg-[#181714] shadow-xl border border-gray-100 dark:border-[#2d2a25] rounded-3xl p-8 sm:p-12 text-left">
-          {/* STEP 1: Create Workspace */}
-          {!guestWorkspaceId && (
-            <div className="space-y-6">
-              <h2 className="text-3xl font-semibold flex items-center gap-4 text-[var(--foreground)]">
-                <span className="bg-[var(--accent)] text-white dark:text-[#111] w-10 h-10 rounded-full flex items-center justify-center text-lg">
-                  1
-                </span>
-                Create your first Workspace
-              </h2>
-              <p className="text-lg text-[var(--muted)] pl-14">
-                Workspaces act as isolated vaults for a specific topic, like
-                &quot;Physics 101&quot; or &quot;Legal Case&quot;.
-              </p>
+          <section className="rounded-lg border border-border bg-surface p-4">
+            <h2 className="mb-4 flex items-center gap-2 font-semibold">
+              <FolderPlus className="h-4 w-4" />
+              New workspace
+            </h2>
+            <form className="space-y-3" onSubmit={submitWorkspace}>
+              <input
+                className="h-10 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none focus:border-primary"
+                value={workspaceForm.name}
+                onChange={(event) =>
+                  setWorkspaceForm((current) => ({
+                    ...current,
+                    name: event.target.value,
+                  }))
+                }
+                placeholder="Research vault"
+              />
+              <textarea
+                className="min-h-20 w-full resize-none rounded-md border border-border bg-surface px-3 py-2 text-sm outline-none focus:border-primary"
+                value={workspaceForm.description}
+                onChange={(event) =>
+                  setWorkspaceForm((current) => ({
+                    ...current,
+                    description: event.target.value,
+                  }))
+                }
+                placeholder="Scope, team, or topic"
+              />
+              <button
+                className="flex h-10 w-full items-center justify-center gap-2 rounded-md bg-primary text-sm font-semibold text-primary-foreground disabled:opacity-60"
+                disabled={loading.workspace || !workspaceForm.name.trim()}
+              >
+                {loading.workspace ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                Create
+              </button>
+            </form>
+          </section>
+        </aside>
 
-              <div className="flex flex-col sm:flex-row gap-4 pl-14 pt-4">
+        <section className="space-y-5">
+          <Feedback error={error} status={status} />
+
+          <div className="grid gap-5 md:grid-cols-3">
+            <Metric
+              icon={<Database className="h-5 w-5" />}
+              label="Active workspace"
+              value={activeWorkspace?.name || "None"}
+            />
+            <Metric
+              icon={<FileText className="h-5 w-5" />}
+              label="Documents"
+              value={String(documents.length)}
+            />
+            <Metric
+              icon={<MessageSquare className="h-5 w-5" />}
+              label="Chat sessions"
+              value={String(sessions.length)}
+            />
+          </div>
+
+          <div className="grid gap-5 xl:grid-cols-[0.95fr_1.05fr]">
+            <section className="rounded-lg border border-border bg-surface p-5">
+              <div className="mb-5 flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-semibold">Document intake</h2>
+                  <p className="mt-1 text-sm text-muted">
+                    Upload source files into the selected workspace.
+                  </p>
+                </div>
+                <Upload className="h-5 w-5 text-muted" />
+              </div>
+
+              <form className="space-y-4" onSubmit={submitDocument}>
+                {/* Mode tabs */}
+                <div className="flex rounded-md border border-border bg-subtle p-1">
+                  {(["file", "url"] as const).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setUploadMode(m)}
+                      className={`h-8 flex-1 rounded text-sm font-semibold transition ${
+                        uploadMode === m
+                          ? "bg-surface text-foreground shadow-sm"
+                          : "text-muted hover:text-foreground"
+                      }`}
+                    >
+                      {m === "file" ? "File upload" : "Web / YouTube URL"}
+                    </button>
+                  ))}
+                </div>
+
+                {uploadMode === "file" ? (
+                  <label className="block rounded-lg border border-dashed border-border bg-subtle p-4">
+                    <span className="text-sm font-semibold text-foreground">Source file</span>
+                    <input
+                      className="mt-3 block w-full text-sm text-muted file:mr-4 file:h-9 file:rounded-md file:border-0 file:bg-primary file:px-3 file:text-sm file:font-semibold file:text-primary-foreground"
+                      type="file"
+                      accept=".pdf,.txt,.md,.markdown,.csv,.json,.yaml,.yml,.ts,.tsx,.js,.jsx,.py,.go,.rs,.java,.cpp,.c"
+                      onChange={(event) => {
+                        const file = event.target.files?.[0] || null;
+                        setSelectedFile(file);
+                        setDocumentTitle(file?.name.replace(/\.[^/.]+$/, "") || "");
+                      }}
+                      disabled={!activeWorkspaceId}
+                    />
+                    <span className="mt-3 block text-xs text-muted">
+                      {selectedFile
+                        ? `${selectedFile.name} — ${sourceTypeForFile(selectedFile)}`
+                        : "PDF, Markdown, CSV, JSON, YAML, code files"}
+                    </span>
+                  </label>
+                ) : (
+                  <label className="block">
+                    <span className="text-sm font-semibold text-foreground">Page or YouTube URL</span>
+                    <input
+                      className="mt-2 h-10 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none focus:border-primary"
+                      type="url"
+                      value={documentUrl}
+                      onChange={(e) => {
+                        setDocumentUrl(e.target.value);
+                        if (!documentTitle) setDocumentTitle(e.target.value);
+                      }}
+                      placeholder="https://example.com/article or YouTube link"
+                      disabled={!activeWorkspaceId}
+                    />
+                    <span className="mt-2 block text-xs text-muted">
+                      {documentUrl.includes("youtube.com") || documentUrl.includes("youtu.be")
+                        ? "YouTube — transcript will be extracted"
+                        : "Web page — article text will be extracted"}
+                    </span>
+                  </label>
+                )}
+
                 <input
-                  type="text"
-                  placeholder="e.g. Machine Learning Research"
-                  className="flex-1 px-5 py-4 text-lg rounded-xl border border-gray-300 dark:border-[#444] bg-[#fafafa] dark:bg-[#222] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] transition-all"
-                  value={workspaceName}
-                  onChange={(e) => setWorkspaceName(e.target.value)}
+                  className="h-10 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none focus:border-primary"
+                  value={documentTitle}
+                  onChange={(event) => setDocumentTitle(event.target.value)}
+                  placeholder="Document title (optional)"
+                  disabled={!activeWorkspaceId}
+                />
+
+                <button
+                  className="flex h-10 w-full items-center justify-center gap-2 rounded-md bg-primary text-sm font-semibold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={
+                    !activeWorkspaceId ||
+                    (uploadMode === "file" ? !selectedFile : !documentUrl.trim()) ||
+                    loading.upload
+                  }
+                >
+                  {loading.upload ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                  Queue document
+                </button>
+              </form>
+
+              <div className="mt-6 space-y-3">
+                <h3 className="text-sm font-semibold text-muted">Recent documents</h3>
+                {documents.map((document) => (
+                  <article
+                    key={document.id}
+                    className="rounded-md border border-border p-3"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-semibold">{document.title}</p>
+                        <p className="mt-1 text-xs text-muted">
+                          {document.sourceType} | {shortDate(document.createdAt)}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <StatusBadge status={document.status} />
+                        <button
+                          onClick={() => handleDeleteDocument(document.id)}
+                          className="rounded p-1 text-muted hover:bg-subtle hover:text-danger"
+                          title="Delete document"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                    {document.status === "FAILED" && document.errorMessage && (
+                      <p className="mt-2 rounded bg-danger-soft px-2 py-1 text-xs text-danger">
+                        ⚠ {document.errorMessage}
+                      </p>
+                    )}
+                    <p className="mt-2 text-xs text-muted">
+                      {document.totalChunks} chunks · {document.tokenCount} tokens
+                    </p>
+                  </article>
+                ))}
+                {documents.length === 0 && (
+                  <p className="rounded-md border border-dashed border-border p-4 text-sm text-muted">
+                    No documents yet. Upload one to activate retrieval.
+                  </p>
+                )}
+              </div>
+            </section>
+
+            <section className="rounded-lg border border-border bg-surface p-5">
+              <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h2 className="text-lg font-semibold">Ask your workspace</h2>
+                  <p className="mt-1 text-sm text-muted">
+                    Create a session, then query indexed workspace knowledge.
+                  </p>
+                </div>
+                <BookOpen className="h-5 w-5 text-muted" />
+              </div>
+
+              <div className="mb-4 grid gap-3 sm:grid-cols-[1fr_auto]">
+                <input
+                  className="h-10 rounded-md border border-border bg-surface px-3 text-sm outline-none focus:border-primary"
+                  value={sessionTitle}
+                  onChange={(event) => setSessionTitle(event.target.value)}
+                  placeholder="Session title"
+                  disabled={!activeWorkspaceId}
                 />
                 <button
-                  onClick={() =>
-                    workspaceName && createGuestWorkspace(workspaceName)
-                  }
-                  disabled={!workspaceName}
-                  className="bg-[var(--accent)] hover:opacity-90 text-white dark:text-[#111] px-8 py-4 rounded-xl font-semibold text-lg flex items-center justify-center gap-2 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+                  onClick={createSession}
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border bg-surface px-3 text-sm font-semibold hover:bg-subtle disabled:opacity-60"
+                  disabled={!activeWorkspaceId || loading.chat}
                 >
-                  <Plus className="w-6 h-6" /> Let&apos;s Go
+                  <Plus className="h-4 w-4" />
+                  New chat
                 </button>
               </div>
-            </div>
-          )}
 
-          {/* STEP 2: Upload Document */}
-          {guestWorkspaceId && !guestDocumentTitle && (
-            <div className="space-y-6">
-              <div className="flex items-center justify-between">
-                <h2 className="text-3xl font-semibold flex items-center gap-4 text-[var(--foreground)]">
-                  <span className="bg-[var(--accent)] text-white dark:text-[#111] w-10 h-10 rounded-full flex items-center justify-center text-lg">
-                    2
-                  </span>
-                  Upload a Document
-                </h2>
-                <span className="text-sm px-4 py-2 bg-gray-100 dark:bg-[#2a2824] text-[var(--muted)] rounded-full font-medium border border-gray-200 dark:border-[#333]">
-                  {guestWorkspaceName} Vault
-                </span>
-              </div>
-              <p className="text-lg text-[var(--muted)] pl-14">
-                Add your first piece of knowledge to your vault. We&apos;ll simulate
-                the upload for our guest experience.
-              </p>
+              {sessions.length > 0 && (
+                <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
+                  {sessions.map((session) => (
+                    <button
+                      key={session.id}
+                      onClick={() => setActiveSession(session.id)}
+                      className={`shrink-0 rounded-md border px-3 py-2 text-sm ${
+                        activeSessionId === session.id
+                          ? "border-primary bg-subtle font-semibold"
+                          : "border-border text-muted hover:text-foreground"
+                      }`}
+                    >
+                      {session.title}
+                    </button>
+                  ))}
+                </div>
+              )}
 
-              <div
-                className={`mt-6 ml-14 border-2 border-dashed rounded-2xl p-10 flex flex-col items-center justify-center text-center transition-all bg-[#fafafa] dark:bg-[#1a1916] ${
-                  isDragging
-                    ? "border-[var(--accent)] bg-[var(--background-alt)] dark:bg-[var(--background-alt)] opacity-80"
-                    : "border-gray-300 dark:border-[#3b3833]"
-                }`}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onDrop={handleDrop}
-              >
-                <UploadCloud
-                  className={`w-14 h-14 mb-6 transition-colors ${isDragging ? "text-[var(--accent)]" : "text-[var(--muted)]"}`}
-                />
-                <p className="text-xl font-medium mb-2 text-[var(--foreground)]">
-                  Drag and drop, or type a mock filename
-                </p>
-                <p className="text-md text-[var(--muted)] mb-8">
-                  PDF, JSON, TXT, MD supported
-                </p>
+              <div className="flex min-h-[360px] flex-col rounded-lg border border-border bg-subtle">
+                <div className="flex-1 space-y-3 overflow-y-auto p-4">
+                  {messages.map((message) => (
+                    <div
+                      key={message.id}
+                      className={`max-w-[88%] rounded-lg border p-3 text-sm leading-6 ${
+                        message.role === "USER"
+                          ? "ml-auto border-primary bg-primary text-primary-foreground"
+                          : "border-border bg-surface text-foreground"
+                      }`}
+                    >
+                      {message.content}
+                    </div>
+                  ))}
+                  {loading.chat && (
+                    <div className="inline-flex items-center gap-2 rounded-md border border-border bg-surface px-3 py-2 text-sm text-muted">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Thinking through the indexed context
+                    </div>
+                  )}
+                  {!activeSessionId && (
+                    <div className="flex h-full min-h-[280px] flex-col items-center justify-center text-center">
+                      <Search className="h-8 w-8 text-muted" />
+                      <p className="mt-3 max-w-sm text-sm leading-6 text-muted">
+                        Start a chat session once your workspace has source
+                        material queued or indexed.
+                      </p>
+                    </div>
+                  )}
+                </div>
 
-                <div className="flex flex-col sm:flex-row w-full max-w-lg gap-4">
+                <form
+                  className="grid gap-2 border-t border-border bg-surface p-3 sm:grid-cols-[1fr_auto]"
+                  onSubmit={sendMessage}
+                >
                   <input
-                    type="text"
-                    placeholder="e.g. quantum-physics-notes.pdf"
-                    className="flex-1 px-5 py-4 text-lg rounded-xl border border-gray-300 dark:border-[#444] bg-white dark:bg-[#222] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] transition-all"
-                    value={fileName}
-                    onChange={(e) => setFileName(e.target.value)}
+                    className="h-11 rounded-md border border-border bg-surface px-3 text-sm outline-none focus:border-primary"
+                    value={prompt}
+                    onChange={(event) => setPrompt(event.target.value)}
+                    placeholder="Ask about your uploaded documents"
+                    disabled={!activeSessionId || loading.chat}
                   />
                   <button
-                    onClick={() => fileName && uploadGuestDocument(fileName)}
-                    disabled={!fileName}
-                    className="bg-[var(--accent)] hover:opacity-90 text-white dark:text-[#111] px-8 py-4 rounded-xl font-semibold text-lg flex items-center justify-center gap-2 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-60"
+                    disabled={!activeSessionId || !prompt.trim() || loading.chat}
                   >
-                    Upload
+                    <ArrowUp className="h-4 w-4" />
+                    Send
                   </button>
-                </div>
+                </form>
               </div>
-            </div>
-          )}
-
-          {/* STEP 3: Prompt Login/Signup */}
-          {guestWorkspaceId && guestDocumentTitle && (
-            <div className="space-y-8 text-center py-6">
-              <div className="inline-flex items-center gap-3 px-6 py-3 bg-[#e8f5e9] dark:bg-[#1c2e20] text-[#2e7d32] dark:text-[#81c784] rounded-full font-medium text-md border border-[#c8e6c9] dark:border-[#2e7d32]">
-                <FileText className="w-5 h-5" /> &quot;{guestDocumentTitle}&quot; uploaded
-                to {guestWorkspaceName}!
-              </div>
-
-              <div className="space-y-4 pt-4">
-                <h2 className="text-4xl font-bold text-[var(--foreground)]">
-                  Unlock Agentic RAG
-                </h2>
-                <p className="text-xl text-[var(--muted)] max-w-2xl mx-auto">
-                  You&apos;ve hit the guest limit. OmniScript requires an account to
-                  process the knowledge graph, build relationships, and start
-                  generating intelligent insights.
-                </p>
-              </div>
-
-              <div className="flex flex-col sm:flex-row items-center justify-center gap-6 pt-8 pb-4">
-                <button className="w-full sm:w-auto bg-[var(--accent)] hover:opacity-90 text-white dark:text-[#111] px-10 py-5 rounded-xl font-semibold text-lg flex items-center justify-center gap-3 transition-all shadow-md">
-                  <Lock className="w-6 h-6" /> Sign up for free
-                </button>
-                <button className="w-full sm:w-auto bg-transparent border-2 border-[var(--accent)] text-[var(--accent)] hover:bg-[var(--background-alt)] px-10 py-5 rounded-xl font-semibold text-lg transition-all">
-                  Log in
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+            </section>
+          </div>
+        </section>
       </div>
     </main>
+  );
+}
+
+function Feedback({ error, status }: { error: string; status: string }) {
+  if (!error && !status) return null;
+
+  return (
+    <div
+      className={`mt-4 flex items-start gap-2 rounded-md border px-3 py-2 text-sm ${
+        error
+          ? "border-danger bg-danger-soft text-danger"
+          : "border-success bg-success-soft text-success"
+      }`}
+    >
+      {error ? <AlertCircle className="mt-0.5 h-4 w-4" /> : <CheckCircle2 className="mt-0.5 h-4 w-4" />}
+      <span>{error || status}</span>
+    </div>
+  );
+}
+
+function Metric({
+  icon,
+  label,
+  value,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-surface p-4">
+      <div className="mb-4 text-muted">{icon}</div>
+      <p className="text-sm text-muted">{label}</p>
+      <p className="mt-1 truncate text-2xl font-semibold">{value}</p>
+    </div>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const inFlight = ["QUEUED", "PROCESSING", "CHUNKING", "EMBEDDING"].includes(status);
+  const className =
+    status === "INDEXED"
+      ? "border-success bg-success-soft text-success"
+      : status === "FAILED"
+        ? "border-danger bg-danger-soft text-danger"
+        : "border-warning bg-warning-soft text-warning";
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-semibold uppercase ${className}`}
+    >
+      {inFlight && <Loader2 className="h-3 w-3 animate-spin" />}
+      {status.toLowerCase()}
+    </span>
   );
 }

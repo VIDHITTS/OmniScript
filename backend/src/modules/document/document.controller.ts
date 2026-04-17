@@ -87,7 +87,12 @@ export class DocumentController {
 
       res.status(201).json({
         message: "Document uploaded and queued for processing",
-        document,
+        document: {
+          ...document,
+          fileSizeBytes: document.fileSizeBytes !== null && document.fileSizeBytes !== undefined
+            ? Number(document.fileSizeBytes)
+            : null,
+        },
       });
     } catch (error) {
       next(error);
@@ -109,7 +114,18 @@ export class DocumentController {
         { cursor, take, status },
       );
 
-      res.status(200).json(result);
+      // Convert BigInt fields to numbers for JSON serialization
+      const serializedResult = {
+        ...result,
+        documents: result.documents.map(doc => ({
+          ...doc,
+          fileSizeBytes: Number(doc.fileSizeBytes),
+          tokenCount: doc.tokenCount ? Number(doc.tokenCount) : 0,
+          totalChunks: doc.totalChunks ? Number(doc.totalChunks) : 0,
+        })),
+      };
+
+      res.status(200).json(serializedResult);
     } catch (error) {
       next(error);
     }
@@ -120,8 +136,15 @@ export class DocumentController {
    */
   public getOne = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const document = await this.documentService.getDocument(req.params.docId);
-      res.status(200).json({ document });
+      const document = await this.documentService.getDocument(req.params.docId as string);
+      // Convert BigInt fields to numbers for JSON serialization
+      const serializedDoc = {
+        ...document,
+        fileSizeBytes: Number(document.fileSizeBytes),
+        tokenCount: document.tokenCount ? Number(document.tokenCount) : 0,
+        totalChunks: document.totalChunks ? Number(document.totalChunks) : 0,
+      };
+      res.status(200).json({ document: serializedDoc });
     } catch (error) {
       next(error);
     }
@@ -133,7 +156,7 @@ export class DocumentController {
    */
   public download = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const document = await this.documentService.getDocument(req.params.docId);
+      const document = await this.documentService.getDocument(req.params.docId as string);
 
       if (!document.storageUrl) {
         throw AppError.notFound("Document file not found.");
@@ -166,7 +189,7 @@ export class DocumentController {
    */
   public delete = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const doc = await this.documentService.getDocument(req.params.docId);
+      const doc = await this.documentService.getDocument(req.params.docId as string);
 
       // Delete from storage first
       if (
