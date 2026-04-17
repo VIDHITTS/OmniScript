@@ -9,6 +9,7 @@ export default defineConfig({
     path: "prisma/migrations",
   },
   datasource: {
-    url: env("DATABASE_URL"),
+    // Use dummy URL for build time if DATABASE_URL is not set
+    url: env("DATABASE_URL") || "postgresql://dummy:dummy@localhost:5432/dummy",
   },
 });
