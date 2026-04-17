@@ -3,7 +3,6 @@ import jwt from "jsonwebtoken";
 import { prisma } from "../../config/db";
 import { env } from "../../config/env";
 import { AppError } from "../../utils/AppError";
-import crypto from "crypto";
 
 export class AuthService {
   /**
@@ -33,14 +32,10 @@ export class AuthService {
       select: { id: true, email: true, fullName: true, createdAt: true },
     });
 
-    // 4. Generate JWT
-    const { accessToken, refreshToken } = this.generateTokens(
-      newUser.id,
-      newUser.email,
-    );
-    await this.storeRefreshToken(newUser.id, refreshToken);
+    // 4. Generate JWT with 7-day expiry
+    const accessToken = this.generateToken(newUser.id, newUser.email);
 
-    return { user: newUser, accessToken, refreshToken };
+    return { user: newUser, accessToken };
   }
 
   /**
@@ -69,12 +64,8 @@ export class AuthService {
       data: { lastLogin: new Date() },
     });
 
-    // 4. Generate JWT
-    const { accessToken, refreshToken } = this.generateTokens(
-      user.id,
-      user.email,
-    );
-    await this.storeRefreshToken(user.id, refreshToken);
+    // 4. Generate JWT with 7-day expiry
+    const accessToken = this.generateToken(user.id, user.email);
 
     const safeUser = {
       id: user.id,
@@ -82,83 +73,18 @@ export class AuthService {
       fullName: user.fullName,
       createdAt: user.createdAt,
     };
-    return { user: safeUser, accessToken, refreshToken };
-  }
-
-  public async refreshUserToken(oldRefreshToken: string) {
-    try {
-      const decoded = jwt.verify(oldRefreshToken, env.JWT_REFRESH_SECRET) as {
-        userId: string;
-        email: string;
-      };
-
-      // Hash the token to compare with stored hash
-      const hashedToken = crypto
-        .createHash("sha256")
-        .update(oldRefreshToken)
-        .digest("hex");
-
-      // Find the stored token in PostgreSQL
-      const storedToken = await prisma.refreshToken.findFirst({
-        where: {
-          userId: decoded.userId,
-          token: hashedToken,
-          expiresAt: { gte: new Date() },
-        },
-      });
-
-      if (!storedToken) {
-        throw new AppError(401, "Invalid or expired refresh token");
-      }
-
-      // Delete the old token
-      await prisma.refreshToken.delete({
-        where: { id: storedToken.id },
-      });
-
-      // Generate and store new tokens
-      const { accessToken, refreshToken } = this.generateTokens(
-        decoded.userId,
-        decoded.email,
-      );
-      await this.storeRefreshToken(decoded.userId, refreshToken);
-
-      return { accessToken, refreshToken };
-    } catch (error) {
-      throw new AppError(401, "Invalid or expired refresh token");
-    }
+    return { user: safeUser, accessToken };
   }
 
   public async logoutUser(userId: string) {
-    await prisma.refreshToken.deleteMany({
-      where: { userId },
-    });
+    // No-op: JWT is stateless, logout is handled client-side by removing the token
+    // This method exists for API compatibility and future audit logging
+    return { success: true };
   }
 
-  private generateTokens(userId: string, email: string) {
-    const accessToken = jwt.sign({ userId, email }, env.JWT_SECRET, {
-      expiresIn: "2h",
-    });
-    const refreshToken = jwt.sign({ userId, email }, env.JWT_REFRESH_SECRET, {
+  private generateToken(userId: string, email: string) {
+    return jwt.sign({ userId, email }, env.JWT_SECRET, {
       expiresIn: "7d",
-    });
-    return { accessToken, refreshToken };
-  }
-
-  private async storeRefreshToken(userId: string, token: string) {
-    // Hash the token before storing
-    const hashedToken = crypto
-      .createHash("sha256")
-      .update(token)
-      .digest("hex");
-
-    // Store in PostgreSQL with 7-day expiration
-    await prisma.refreshToken.create({
-      data: {
-        userId,
-        token: hashedToken,
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-      },
     });
   }
 }

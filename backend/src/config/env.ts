@@ -11,7 +11,6 @@ const envSchema = z.object({
   MONGO_URI: z.string().url(),
   REDIS_URL: z.string().url().optional(),
   JWT_SECRET: z.string().min(10),
-  JWT_REFRESH_SECRET: z.string().min(10),
   GROQ_API_KEY: z.string().min(1),
   COHERE_API_KEY: z.string().min(1),
   STORAGE_BACKEND: z.enum(["GRIDFS", "S3"]).default("GRIDFS"),

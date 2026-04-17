@@ -210,16 +210,6 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (!mounted || accessToken || !user) return;
-    void apiClient("/auth/refresh", { method: "POST" })
-      .then((result) => setAuth(result.accessToken, user))
-      .catch(() => {
-        logout();
-        setError("Your session expired. Please log in again.");
-      });
-  }, [mounted, accessToken, user, setAuth, logout]);
-
-  useEffect(() => {
     if (!mounted || !accessToken) return;
     void loadWorkspaces();
   }, [mounted, accessToken, loadWorkspaces]);
@@ -435,17 +425,6 @@ export default function Home() {
   };
 
   if (!mounted) return null;
-
-  if (user && !accessToken) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-background px-6 text-foreground">
-        <div className="rounded-lg border border-border bg-surface p-6 text-center shadow-sm">
-          <Loader2 className="mx-auto h-6 w-6 animate-spin text-primary" />
-          <p className="mt-3 text-sm text-muted">Restoring secure session</p>
-        </div>
-      </main>
-    );
-  }
 
   if (!isAuthenticated) {
     return (
