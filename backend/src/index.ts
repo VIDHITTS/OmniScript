@@ -52,8 +52,8 @@ const startServer = async () => {
   // Connect to GridFS for storing binary files (PDFs, Audio, etc)
   await gridFsStorage.connect();
 
-  const server = app.listen(env.PORT, () => {
-    logger.info(`Server is running on http://localhost:${env.PORT}`);
+  const server = app.listen(env.PORT, '0.0.0.0', () => {
+    logger.info(`Server is running on http://0.0.0.0:${env.PORT}`);
   });
 
   const gracefulShutdown = async (signal: string) => {
