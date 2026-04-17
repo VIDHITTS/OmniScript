@@ -40,6 +40,7 @@ export const useStore = create<AppState>()(
     {
       name: "omniscript-storage",
       partialize: (state) => ({
+        accessToken: state.accessToken,
         user: state.user,
         activeWorkspaceId: state.activeWorkspaceId,
         activeSessionId: state.activeSessionId,
