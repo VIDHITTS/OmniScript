@@ -13,22 +13,16 @@ export class GuestSessionService {
   private ipSessions: Map<string, string> = new Map(); // IP hash -> sessionId
 
   /**
-   * Get or create a guest session based on IP address
-   * Prevents users from refreshing to get new limits
+   * Get or create a guest session based on session ID from client
+   * If no session ID provided, create a new one
    */
-  public getOrCreateSession(identifier: GuestIdentifier): GuestSession {
-    const ipHash = this.hashIdentifier(identifier);
-    
-    // Check if this IP already has a session
-    const existingSessionId = this.ipSessions.get(ipHash);
-    if (existingSessionId) {
-      const session = this.sessions.get(existingSessionId);
-      if (session && !this.isExpired(session)) {
-        return session;
+  public getOrCreateSession(identifier: GuestIdentifier, clientSessionId?: string): GuestSession {
+    // If client provides a session ID, try to use it
+    if (clientSessionId) {
+      const existingSession = this.sessions.get(clientSessionId);
+      if (existingSession && !this.isExpired(existingSession)) {
+        return existingSession;
       }
-      // Session expired, clean up
-      this.sessions.delete(existingSessionId);
-      this.ipSessions.delete(ipHash);
     }
 
     // Create new session
@@ -45,7 +39,6 @@ export class GuestSessionService {
     };
 
     this.sessions.set(sessionId, session);
-    this.ipSessions.set(ipHash, sessionId);
 
     return session;
   }

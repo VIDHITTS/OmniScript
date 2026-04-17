@@ -35,11 +35,17 @@ export const handleGuestSession = (
       userAgent: getUserAgent(req),
     };
 
-    // Get or create guest session based on IP
-    const session = guestSessionService.getOrCreateSession(identifier);
+    // Get session ID from header if provided by client
+    const clientSessionId = req.headers["x-guest-session-id"] as string | undefined;
+
+    // Get or create guest session
+    const session = guestSessionService.getOrCreateSession(identifier, clientSessionId);
     
     // Attach to request
     req.guestSession = session;
+
+    // Send session ID back to client in response header
+    res.setHeader("X-Guest-Session-Id", session.sessionId);
 
     next();
   } catch (error) {
