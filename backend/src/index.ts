@@ -39,6 +39,20 @@ app.use("/api/auth", authRoutes);
 app.use("/api/workspaces", workspaceRoutes);
 app.use("/api/documents", documentRoutes);
 
+// Root route
+app.get("/", (req: Request, res: Response) => {
+  res.status(200).json({ 
+    message: "OmniScript API Server",
+    version: "1.0.0",
+    endpoints: {
+      health: "/health",
+      auth: "/api/auth",
+      workspaces: "/api/workspaces",
+      documents: "/api/documents"
+    }
+  });
+});
+
 // Health check
 app.get("/health", (req: Request, res: Response) => {
   res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
