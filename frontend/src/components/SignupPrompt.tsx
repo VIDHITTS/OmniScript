@@ -35,7 +35,7 @@ export default function SignupPrompt({ isOpen, onClose, limitType }: SignupPromp
             {limitType === "document" ? "Upload Limit Reached" : "Query Limit Reached"}
           </h2>
           <p className="mt-2 text-muted">
-            You've used your free trial. Sign up to unlock unlimited access!
+            You&apos;ve used your free trial. Sign up to unlock unlimited access!
           </p>
         </div>
 

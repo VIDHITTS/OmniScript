@@ -1,18 +1,16 @@
 "use client";
 
 import { useState, useEffect, FormEvent } from "react";
-import { Upload, MessageSquare, ArrowRight, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
+import { Upload, MessageSquare, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
 import { useGuestStore } from "@/store/useGuestStore";
 import { guestApi } from "@/lib/guest-api";
 import SignupPrompt from "./SignupPrompt";
 
 export default function GuestLanding() {
   const {
-    sessionId,
     limits,
     workspaceId,
     documentId,
-    chatSessionId,
     setSession,
     setWorkspace,
     setDocument,
@@ -26,7 +24,7 @@ export default function GuestLanding() {
   const [uploading, setUploading] = useState(false);
   const [chatting, setChatting] = useState(false);
   const [query, setQuery] = useState("");
-  const [messages, setMessages] = useState<any[]>([]);
+  const [messages, setMessages] = useState<Array<{ id: string; role: string; content: string }>>([]);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [showSignupModal, setShowSignupModal] = useState(false);
@@ -38,7 +36,7 @@ export default function GuestLanding() {
     guestApi.getSession().then((data) => {
       setSession(data.sessionId, data.limits, data.expiresAt);
     }).catch(console.error);
-  }, []);
+  }, [setSession]);
 
   const handleFileUpload = async (e: FormEvent) => {
     e.preventDefault();
@@ -55,9 +53,10 @@ export default function GuestLanding() {
       updateLimits(result.limits);
       setSuccess("Document uploaded! You can now ask questions.");
       setSelectedFile(null);
-    } catch (err: any) {
-      setError(err.message);
-      if (err.message.includes("limit")) {
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : "Upload failed";
+      setError(errorMessage);
+      if (errorMessage.includes("limit")) {
         setLimitType("document");
         setShowSignupModal(true);
       }
@@ -83,9 +82,10 @@ export default function GuestLanding() {
       setChatSession(result.chatSession.id);
       updateLimits(result.limits);
       setQuery("");
-    } catch (err: any) {
-      setError(err.message);
-      if (err.message.includes("limit")) {
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : "Query failed";
+      setError(errorMessage);
+      if (errorMessage.includes("limit")) {
         setLimitType("query");
         setShowSignupModal(true);
       }
