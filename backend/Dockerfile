@@ -31,8 +31,12 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/package*.json ./
 
+# Copy startup script
+COPY start.sh ./
+RUN chmod +x start.sh
+
 # Expose port
 EXPOSE 7860
 
-# Start the application
-CMD ["node", "dist/index.js"]
+# Start the application with migrations
+CMD ["./start.sh"]
