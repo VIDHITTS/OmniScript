@@ -13,8 +13,9 @@ RUN npm install && npm cache clean --force
 # Copy source code
 COPY . .
 
-# Generate Prisma client
-RUN npx prisma generate
+# Generate Prisma client (with dummy DATABASE_URL for build time)
+# The real DATABASE_URL will be provided at runtime via environment variables
+RUN DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy" npx prisma generate
 
 # Build TypeScript
 RUN npm run build
