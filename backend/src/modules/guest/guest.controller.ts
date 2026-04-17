@@ -148,7 +148,9 @@ export class GuestController {
         return;
       }
 
-      const { chatSessionId } = req.params;
+      const chatSessionId = Array.isArray(req.params.chatSessionId) 
+        ? req.params.chatSessionId[0] 
+        : req.params.chatSessionId;
 
       const messages = await guestChatService.getMessages(
         session.sessionId,
