@@ -23,7 +23,7 @@ OmniScript is a full-stack, intelligence-driven document platform that allows yo
 - **🔎 Hybrid Search:** Vector similarity (pgvector) and Full-Text (tsvector) merged with RRF for extreme precision.
 - **⚙️ Agentic Orchestration:** Dynamic tool-calling enabling the AI to pick the best retrieval strategy based on query complexity.
 - **📊 Auto-Generated Artifacts:** Instantly create summaries, flashcards, mind maps, and study guides directly from your documents.
-- **🔐 Enterprise-Ready Auth:** JWT access/refresh token rotation, email verification, MFA, and API keys.
+- **🔐 Enterprise-Ready Auth:** JWT access/refresh token rotation with PostgreSQL-based token storage, email verification, MFA, and API keys.
 
 ---
 
@@ -34,9 +34,26 @@ OmniScript is a full-stack, intelligence-driven document platform that allows yo
 | **Frontend** | Next.js 15, React, Tailwind CSS, shadcn/ui |
 | **Backend API** | Node.js, Express, TypeScript, Zod |
 | **Database** | PostgreSQL 16 (pgvector, pg_trgm), Prisma ORM |
-| **Queue & Cache** | BullMQ, Redis |
 | **Storage** | MongoDB GridFS / AWS S3 / MinIO |
 | **AI / LLMs** | Groq, OpenAI, Cohere |
+| **Deployment** | Hugging Face Spaces (Backend), Vercel/Netlify (Frontend) |
+
+---
+
+## 🚀 Deployment
+
+### Backend (Hugging Face Spaces)
+The backend is deployed on Hugging Face Spaces using Docker:
+- **Live API**: https://vidhitts-omniscript.hf.space
+- **Health Check**: https://vidhitts-omniscript.hf.space/health
+- **Database**: Neon PostgreSQL (serverless)
+- **Storage**: MongoDB GridFS
+- **No Redis Required**: Refresh tokens stored in PostgreSQL, queue processing runs synchronously
+
+### Frontend
+- **Framework**: Next.js 15 with App Router
+- **Deployment**: Vercel/Netlify recommended
+- **API URL**: Configured via `NEXT_PUBLIC_API_URL` environment variable
 
 ---
 

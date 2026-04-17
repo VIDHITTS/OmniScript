@@ -56,6 +56,14 @@ erDiagram
         timestamp created_at
     }
 
+    REFRESH_TOKENS {
+        uuid id PK
+        uuid user_id FK
+        string token "SHA-256 hashed refresh token"
+        timestamp expires_at
+        timestamp created_at
+    }
+
     %% ===== KNOWLEDGE BASE (MULTI-MODAL INGESTION) =====
     DOCUMENTS {
         uuid id PK
@@ -253,6 +261,7 @@ erDiagram
     USERS ||--o{ WORKSPACE_MEMBERS : "member of"
     WORKSPACES ||--o{ WORKSPACE_MEMBERS : "has members"
     USERS ||--o{ API_KEYS : "has keys"
+    USERS ||--o{ REFRESH_TOKENS : "has tokens"
 
     %% Knowledge Base
     WORKSPACES ||--o{ DOCUMENTS : "contains"
@@ -318,6 +327,7 @@ erDiagram
 | `AUDIT_LOG`          | `(user_id, created_at DESC)`                       | Security audit trail                     |
 | `USAGE_METRICS`      | `(user_id, metric_date)`                           | Daily usage aggregation                  |
 | `API_KEYS`           | `(key_hash)`                                       | Fast API key lookup on every request     |
+| `REFRESH_TOKENS`     | `(user_id)`, `(token)`                             | Fast refresh token lookup and validation |
 | `MESSAGE_FEEDBACK`   | `(message_id)`                                     | Aggregate feedback per message           |
 
 ---
@@ -340,26 +350,34 @@ The retrieval pipeline uses 4 stages: Hybrid Search (vector + BM25 via RRF), Pag
 
 Documents reference a `storage_url` and `storage_backend` field. Storage is abstracted behind a `StorageService` interface. Default: MongoDB GridFS (simpler, no extra service). Production: S3/MinIO (CDN, presigned URLs). Switching is a config change.
 
-### 5. Knowledge Graph in Postgres (Not Neo4j)
+### 5. PostgreSQL-Based Refresh Tokens (No Redis Required)
+
+`REFRESH_TOKENS` table stores JWT refresh tokens with SHA-256 hashing and expiration timestamps. This eliminates the Redis dependency, making deployment simpler (especially for platforms like Hugging Face Spaces). Tokens are validated against the database and automatically cleaned up via expiration checks. Queue processing runs synchronously when Redis is unavailable.
+
+### 6. Knowledge Graph in Postgres (Not Neo4j)
 
 `KG_ENTITIES`, `KG_EDGES`, and `KG_ENTITY_CHUNKS` use standard foreign keys. The graph is workspace-scoped and moderate-sized (thousands of nodes, not billions), so Postgres handles it fine with recursive CTEs and proper indexing. `normalized_name` ensures deduplication.
 
-### 6. Agentic RAG via Tool Registry (Claude Code-Inspired)
+### 6. Knowledge Graph in Postgres (Not Neo4j)
+
+`KG_ENTITIES`, `KG_EDGES`, and `KG_ENTITY_CHUNKS` use standard foreign keys. The graph is workspace-scoped and moderate-sized (thousands of nodes, not billions), so Postgres handles it fine with recursive CTEs and proper indexing. `normalized_name` ensures deduplication.
+
+### 7. Agentic RAG via Tool Registry (Claude Code-Inspired)
 
 Messages store a `tool_calls` JSONB column with the agent's reasoning steps — searches performed, queries rephrased, tools selected. Tools follow a `buildTool()` pattern with Zod schemas, creating a debuggable, replayable audit trail. The `retrieval_strategy` field on messages tracks which path the adaptive router chose.
 
-### 7. Conversation Branching (Self-Referential CHAT_SESSIONS)
+### 8. Conversation Branching (Self-Referential CHAT_SESSIONS)
 
 `CHAT_SESSIONS` has a `parent_session_id` FK pointing to itself, enabling tree-structured conversations — users can explore tangents without losing the original thread.
 
-### 8. Feedback Loop (MESSAGE_FEEDBACK)
+### 9. Feedback Loop (MESSAGE_FEEDBACK)
 
 Users rate AI answers as GOOD / BAD / PARTIAL. Creates a labeled dataset for evaluating and improving RAG quality over time.
 
-### 9. Webhook and API Key System
+### 10. Webhook and API Key System
 
 `WEBHOOKS` for push notifications, `API_KEYS` for programmatic access. HMAC-SHA256 signed payloads for webhook verification.
 
-### 10. Multi-Granularity Observability
+### 11. Multi-Granularity Observability
 
 Three separate tables: `ACTIVITY_LOG` (workspace-level), `AUDIT_LOG` (security), `USAGE_METRICS` (billing with `tokens_consumed_reranking` tracking). Each serves a different audience and concern.
