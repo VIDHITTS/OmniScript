@@ -683,6 +683,20 @@ export default function Home() {
                 <Upload className="h-5 w-5 text-muted" />
               </div>
 
+              {!activeWorkspaceId && (
+                <div className="mb-4 rounded-lg border border-warning bg-warning-soft p-4">
+                  <div className="flex items-start gap-3">
+                    <AlertCircle className="h-5 w-5 shrink-0 text-warning" />
+                    <div>
+                      <p className="font-semibold text-warning">No workspace selected</p>
+                      <p className="mt-1 text-sm text-muted">
+                        Create a workspace using the form on the left to start uploading documents.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <form className="space-y-4" onSubmit={submitDocument}>
                 {/* Mode tabs */}
                 <div className="flex rounded-md border border-border bg-subtle p-1">
@@ -696,6 +710,7 @@ export default function Home() {
                           ? "bg-surface text-foreground shadow-sm"
                           : "text-muted hover:text-foreground"
                       }`}
+                      disabled={!activeWorkspaceId}
                     >
                       {m === "file" ? "File upload" : "Web / YouTube URL"}
                     </button>
@@ -703,10 +718,14 @@ export default function Home() {
                 </div>
 
                 {uploadMode === "file" ? (
-                  <label className="block rounded-lg border border-dashed border-border bg-subtle p-4">
+                  <label className={`block rounded-lg border border-dashed p-4 ${
+                    !activeWorkspaceId 
+                      ? "border-border bg-subtle opacity-50 cursor-not-allowed" 
+                      : "border-border bg-subtle cursor-pointer hover:border-primary"
+                  }`}>
                     <span className="text-sm font-semibold text-foreground">Source file</span>
                     <input
-                      className="mt-3 block w-full text-sm text-muted file:mr-4 file:h-9 file:rounded-md file:border-0 file:bg-primary file:px-3 file:text-sm file:font-semibold file:text-primary-foreground"
+                      className="mt-3 block w-full text-sm text-muted file:mr-4 file:h-9 file:rounded-md file:border-0 file:bg-primary file:px-3 file:text-sm file:font-semibold file:text-primary-foreground disabled:cursor-not-allowed"
                       type="file"
                       accept=".pdf,.txt,.md,.markdown,.csv,.json,.yaml,.yml,.ts,.tsx,.js,.jsx,.py,.go,.rs,.java,.cpp,.c"
                       onChange={(event) => {
@@ -719,21 +738,23 @@ export default function Home() {
                     <span className="mt-3 block text-xs text-muted">
                       {selectedFile
                         ? `${selectedFile.name} — ${sourceTypeForFile(selectedFile)}`
-                        : "PDF, Markdown, CSV, JSON, YAML, code files"}
+                        : activeWorkspaceId 
+                          ? "PDF, Markdown, CSV, JSON, YAML, code files"
+                          : "Select a workspace first to upload files"}
                     </span>
                   </label>
                 ) : (
                   <label className="block">
                     <span className="text-sm font-semibold text-foreground">Page or YouTube URL</span>
                     <input
-                      className="mt-2 h-10 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none focus:border-primary"
+                      className="mt-2 h-10 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none focus:border-primary disabled:cursor-not-allowed disabled:opacity-50"
                       type="url"
                       value={documentUrl}
                       onChange={(e) => {
                         setDocumentUrl(e.target.value);
                         if (!documentTitle) setDocumentTitle(e.target.value);
                       }}
-                      placeholder="https://example.com/article or YouTube link"
+                      placeholder={activeWorkspaceId ? "https://example.com/article or YouTube link" : "Select a workspace first"}
                       disabled={!activeWorkspaceId}
                     />
                     <span className="mt-2 block text-xs text-muted">
@@ -745,10 +766,10 @@ export default function Home() {
                 )}
 
                 <input
-                  className="h-10 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none focus:border-primary"
+                  className="h-10 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none focus:border-primary disabled:cursor-not-allowed disabled:opacity-50"
                   value={documentTitle}
                   onChange={(event) => setDocumentTitle(event.target.value)}
-                  placeholder="Document title (optional)"
+                  placeholder={activeWorkspaceId ? "Document title (optional)" : "Select a workspace first"}
                   disabled={!activeWorkspaceId}
                 />
 
@@ -819,12 +840,26 @@ export default function Home() {
                 <BookOpen className="h-5 w-5 text-muted" />
               </div>
 
+              {!activeWorkspaceId && (
+                <div className="mb-4 rounded-lg border border-warning bg-warning-soft p-4">
+                  <div className="flex items-start gap-3">
+                    <AlertCircle className="h-5 w-5 shrink-0 text-warning" />
+                    <div>
+                      <p className="font-semibold text-warning">No workspace selected</p>
+                      <p className="mt-1 text-sm text-muted">
+                        Select or create a workspace to start chatting with your documents.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="mb-4 grid gap-3 sm:grid-cols-[1fr_auto]">
                 <input
-                  className="h-10 rounded-md border border-border bg-surface px-3 text-sm outline-none focus:border-primary"
+                  className="h-10 rounded-md border border-border bg-surface px-3 text-sm outline-none focus:border-primary disabled:cursor-not-allowed disabled:opacity-50"
                   value={sessionTitle}
                   onChange={(event) => setSessionTitle(event.target.value)}
-                  placeholder="Session title"
+                  placeholder={activeWorkspaceId ? "Session title" : "Select a workspace first"}
                   disabled={!activeWorkspaceId}
                 />
                 <button
