@@ -1,6 +1,6 @@
 import { useStore } from "@/store/useStore";
 
-const baseURL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api";
+const baseURL = process.env.NEXT_PUBLIC_API_URL || "https://vidhitts-omniscript.hf.space/api";
 
 type ApiOptions = RequestInit & {
   token?: string | null;

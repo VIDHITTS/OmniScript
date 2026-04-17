@@ -1,8 +1,3 @@
-// This is your Prisma schema file.
-// Since we are using MySQL for now, Postgres-specific types like 'vector'
-// and 'tsvector' have been modeled as 'Json' or 'String @db.Text'.
-// Once we move back to Postgres, we can update these with Unsupported("vector") or tsvector.
-
 generator client {
   provider        = "prisma-client-js"
   previewFeatures = ["postgresqlExtensions"]
@@ -12,7 +7,287 @@ datasource db {
   provider = "postgresql"
 }
 
-// ===== ENUMS =====
+model User {
+  id                 String            @id @default(uuid())
+  email              String            @unique
+  passwordHash       String?
+  fullName           String
+  avatarUrl          String?
+  authProvider       AuthProvider      @default(LOCAL)
+  oauthId            String?
+  mfaEnabled         Boolean           @default(false)
+  mfaSecret          String?
+  emailVerifiedAt    DateTime?
+  lastLogin          DateTime?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  activityLogs       ActivityLog[]
+  annotations        Annotation[]
+  apiKeys            ApiKey[]
+  artifactsGenerated Artifact[]
+  auditLogs          AuditLog[]
+  chatSessions       ChatSession[]
+  documentsUploaded  Document[]
+  feedbackMessages   Message[]         @relation("UserFeedback")
+  messageFeedbacks   MessageFeedback[]
+  refreshTokens      RefreshToken[]
+  workspacesOwned    Workspace[]       @relation("OwnerWorkspaces")
+  workspaceMembers   WorkspaceMember[]
+}
+
+model Workspace {
+  id           String            @id @default(uuid())
+  name         String
+  description  String?
+  icon         String?
+  ownerId      String
+  template     Template          @default(CUSTOM)
+  isPublic     Boolean           @default(false)
+  settings     Json?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  activityLogs ActivityLog[]
+  annotations  Annotation[]
+  artifacts    Artifact[]
+  chatSessions ChatSession[]
+  documents    Document[]
+  kgEntities   KgEntity[]
+  owner        User              @relation("OwnerWorkspaces", fields: [ownerId], references: [id])
+  members      WorkspaceMember[]
+}
+
+model WorkspaceMember {
+  id          String        @id @default(uuid())
+  workspaceId String
+  userId      String
+  role        WorkspaceRole @default(VIEWER)
+  joinedAt    DateTime      @default(now())
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+}
+
+model ApiKey {
+  id          String    @id @default(uuid())
+  userId      String
+  name        String
+  keyHash     String    @unique
+  permissions Json?
+  expiresAt   DateTime?
+  lastUsedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+}
+
+model Document {
+  id               String              @id @default(uuid())
+  workspaceId      String
+  uploadedById     String
+  title            String
+  originalFilename String
+  storageUrl       String?
+  storageBackend   StorageBackend      @default(GRIDFS)
+  mimeType         String?
+  fileSizeBytes    BigInt?
+  sourceType       SourceType
+  status           Status              @default(QUEUED)
+  errorMessage     String?
+  totalChunks      Int                 @default(0)
+  tokenCount       Int                 @default(0)
+  metadata         Json?
+  searchVector     String?
+  processedAt      DateTime?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  uploadedBy       User                @relation(fields: [uploadedById], references: [id])
+  workspace        Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  chunks           DocumentChunk[]
+  structures       DocumentStructure[]
+}
+
+model DocumentStructure {
+  id         String              @id @default(uuid())
+  documentId String
+  parentId   String?
+  title      String
+  level      Int
+  pageRange  Json?
+  sequence   Int
+  createdAt  DateTime            @default(now())
+  document   Document            @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  parent     DocumentStructure?  @relation("StructureHierarchy", fields: [parentId], references: [id])
+  children   DocumentStructure[] @relation("StructureHierarchy")
+}
+
+model DocumentChunk {
+  id                    String          @id @default(uuid())
+  documentId            String
+  content               String
+  contextualizedContent String?
+  embedding             Json?
+  chunkIndex            Int
+  tokenCount            Int
+  sectionHeading        String?
+  location              Json?
+  searchVector          String?
+  rerankScore           Float?
+  createdAt             DateTime        @default(now())
+  document              Document        @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  kgSourceEdges         KgEdge[]        @relation("SourceChunk")
+  kgEntityChunks        KgEntityChunk[]
+}
+
+model KgEntity {
+  id           String          @id @default(uuid())
+  workspaceId  String
+  name         String
+  entityType   EntityType
+  description  String?
+  mentionCount Int             @default(0)
+  metadata     Json?
+  createdAt    DateTime        @default(now())
+  sourceEdges  KgEdge[]        @relation("SourceEntity")
+  targetEdges  KgEdge[]        @relation("TargetEntity")
+  workspace    Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  entityChunks KgEntityChunk[]
+}
+
+model KgEdge {
+  id             String         @id @default(uuid())
+  sourceEntityId String
+  targetEntityId String
+  relationship   String
+  confidence     Float
+  sourceChunkId  String?
+  createdAt      DateTime       @default(now())
+  sourceChunk    DocumentChunk? @relation("SourceChunk", fields: [sourceChunkId], references: [id])
+  sourceEntity   KgEntity       @relation("SourceEntity", fields: [sourceEntityId], references: [id], onDelete: Cascade)
+  targetEntity   KgEntity       @relation("TargetEntity", fields: [targetEntityId], references: [id], onDelete: Cascade)
+}
+
+model KgEntityChunk {
+  id            String        @id @default(uuid())
+  entityId      String
+  chunkId       String
+  mentionOffset Int?
+  chunk         DocumentChunk @relation(fields: [chunkId], references: [id], onDelete: Cascade)
+  entity        KgEntity      @relation(fields: [entityId], references: [id], onDelete: Cascade)
+
+  @@unique([entityId, chunkId])
+}
+
+model ChatSession {
+  id                   String        @id @default(uuid())
+  workspaceId          String
+  userId               String
+  title                String
+  parentSessionId      String?
+  branchPointMessageId String?
+  isPinned             Boolean       @default(false)
+  lastActiveAt         DateTime      @default(now())
+  createdAt            DateTime      @default(now())
+  artifacts            Artifact[]
+  parentSession        ChatSession?  @relation("SessionBranches", fields: [parentSessionId], references: [id])
+  childSessions        ChatSession[] @relation("SessionBranches")
+  user                 User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace            Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  messages             Message[]
+}
+
+model Message {
+  id                 String            @id @default(uuid())
+  sessionId          String
+  userId             String?
+  role               MessageRole
+  content            String
+  citations          Json?
+  toolCalls          Json?
+  suggestedFollowups Json?
+  tokenUsage         Int?
+  confidenceScore    Float?
+  isBookmarked       Boolean           @default(false)
+  createdAt          DateTime          @default(now())
+  annotations        Annotation[]
+  session            ChatSession       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user               User?             @relation("UserFeedback", fields: [userId], references: [id], onDelete: Cascade)
+  feedbacks          MessageFeedback[]
+}
+
+model MessageFeedback {
+  id        String   @id @default(uuid())
+  messageId String
+  userId    String
+  rating    Rating
+  comment   String?
+  createdAt DateTime @default(now())
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Artifact {
+  id              String       @id @default(uuid())
+  workspaceId     String
+  generatedById   String
+  sourceSessionId String?
+  artifactType    ArtifactType
+  title           String
+  content         Json
+  exportUrl       String?
+  createdAt       DateTime     @default(now())
+  generatedBy     User         @relation(fields: [generatedById], references: [id])
+  sourceSession   ChatSession? @relation(fields: [sourceSessionId], references: [id])
+  workspace       Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model Annotation {
+  id              String    @id @default(uuid())
+  workspaceId     String
+  userId          String
+  targetChunkId   String?
+  targetMessageId String?
+  content         String
+  highlightRange  Json?
+  createdAt       DateTime  @default(now())
+  message         Message?  @relation(fields: [targetMessageId], references: [id])
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model ActivityLog {
+  id          String         @id @default(uuid())
+  workspaceId String
+  userId      String
+  action      ActivityAction
+  description String
+  details     Json?
+  createdAt   DateTime       @default(now())
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace   Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id        String      @id @default(uuid())
+  userId    String?
+  ipAddress String?
+  userAgent String?
+  action    AuditAction
+  details   Json?
+  createdAt DateTime    @default(now())
+  user      User?       @relation(fields: [userId], references: [id])
+}
 
 enum AuthProvider {
   LOCAL
@@ -111,320 +386,4 @@ enum AuditAction {
 enum StorageBackend {
   GRIDFS
   S3
-}
-
-// ===== CORE IDENTITY & ACCESS =====
-
-model User {
-  id              String       @id @default(uuid())
-  email           String       @unique
-  passwordHash    String? // Nullable if OAuth
-  fullName        String
-  avatarUrl       String?
-  authProvider    AuthProvider @default(LOCAL)
-  oauthId         String?
-  mfaEnabled      Boolean      @default(false)
-  mfaSecret       String? // Encrypted
-  emailVerifiedAt DateTime?
-  lastLogin       DateTime?
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
-
-  // Relationships
-  workspacesOwned    Workspace[]       @relation("OwnerWorkspaces")
-  workspaceMembers   WorkspaceMember[]
-  apiKeys            ApiKey[]
-  documentsUploaded  Document[]
-  chatSessions       ChatSession[]
-  messageFeedbacks   MessageFeedback[]
-  feedbackMessages   Message[]         @relation("UserFeedback")
-  artifactsGenerated Artifact[]
-  annotations        Annotation[]
-  activityLogs       ActivityLog[]
-  auditLogs          AuditLog[]
-  refreshTokens      RefreshToken[]
-}
-
-model Workspace {
-  id          String   @id @default(uuid())
-  name        String
-  description String?  @db.Text
-  icon        String? // Emoji or URL
-  ownerId     String
-  template    Template @default(CUSTOM)
-  isPublic    Boolean  @default(false)
-  settings    Json? // { chunk_size, overlap, model_preferences }
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  owner        User              @relation("OwnerWorkspaces", fields: [ownerId], references: [id])
-  members      WorkspaceMember[]
-  documents    Document[]
-  kgEntities   KgEntity[]
-  chatSessions ChatSession[]
-  artifacts    Artifact[]
-  annotations  Annotation[]
-  activityLogs ActivityLog[]
-}
-
-model WorkspaceMember {
-  id          String        @id @default(uuid())
-  workspaceId String
-  userId      String
-  role        WorkspaceRole @default(VIEWER)
-  joinedAt    DateTime      @default(now())
-
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([workspaceId, userId])
-}
-
-model ApiKey {
-  id          String    @id @default(uuid())
-  userId      String
-  name        String
-  keyHash     String    @unique
-  permissions Json? // read, write, admin scopes
-  expiresAt   DateTime?
-  lastUsedAt  DateTime?
-  createdAt   DateTime  @default(now())
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-}
-
-model RefreshToken {
-  id        String   @id @default(uuid())
-  userId    String
-  token     String
-  expiresAt DateTime
-  createdAt DateTime @default(now())
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@index([token])
-}
-
-// ===== KNOWLEDGE BASE (MULTI-MODAL INGESTION) =====
-
-model Document {
-  id               String     @id @default(uuid())
-  workspaceId      String
-  uploadedById     String
-  title            String
-  originalFilename String
-  storageUrl       String? // S3 or MinIO URL
-  storageBackend   StorageBackend @default(GRIDFS)
-  mimeType         String?
-  fileSizeBytes    BigInt?
-  sourceType       SourceType
-  status           Status     @default(QUEUED)
-  errorMessage     String?    @db.Text
-  totalChunks      Int        @default(0)
-  tokenCount       Int        @default(0)
-  metadata         Json? // author, tags, page_count, duration, language
-  searchVector     String?    @db.Text // Full-text search index substitute for MySQL
-  processedAt      DateTime?
-  createdAt        DateTime   @default(now())
-  updatedAt        DateTime   @updatedAt
-
-  workspace  Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  uploadedBy User            @relation(fields: [uploadedById], references: [id])
-  chunks     DocumentChunk[]
-  structures DocumentStructure[]
-}
-
-model DocumentStructure {
-  id          String   @id @default(uuid())
-  documentId  String
-  parentId    String?
-  title       String
-  level       Int      // 1=H1, 2=H2, etc.
-  pageRange   Json?    // { start: 1, end: 5 }
-  sequence    Int      // ordering within parent
-  createdAt   DateTime @default(now())
-
-  document    Document            @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  parent      DocumentStructure?  @relation("StructureHierarchy", fields: [parentId], references: [id])
-  children    DocumentStructure[] @relation("StructureHierarchy")
-}
-
-model DocumentChunk {
-  id             String   @id @default(uuid())
-  documentId     String
-  content        String   @db.Text
-  contextualizedContent String? @db.Text
-  embedding      Json? // Represents vector (dim 1536 OpenAI) - MySQL substitute
-  chunkIndex     Int
-  tokenCount     Int
-  sectionHeading String?
-  location       Json? // page_num, start_time, end_time, line_range
-  searchVector   String?  @db.Text // BM25 full-text index substitute
-  rerankScore    Float?
-  createdAt      DateTime @default(now())
-
-  document       Document        @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  kgEntityChunks KgEntityChunk[]
-  kgSourceEdges  KgEdge[]        @relation("SourceChunk")
-}
-
-// ===== KNOWLEDGE GRAPH =====
-
-model KgEntity {
-  id           String     @id @default(uuid())
-  workspaceId  String
-  name         String
-  entityType   EntityType
-  description  String?    @db.Text
-  mentionCount Int        @default(0)
-  metadata     Json? // aliases, links
-  createdAt    DateTime   @default(now())
-
-  workspace    Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  sourceEdges  KgEdge[]        @relation("SourceEntity")
-  targetEdges  KgEdge[]        @relation("TargetEntity")
-  entityChunks KgEntityChunk[]
-}
-
-model KgEdge {
-  id             String   @id @default(uuid())
-  sourceEntityId String
-  targetEntityId String
-  relationship   String // developed, published_in, etc.
-  confidence     Float
-  sourceChunkId  String?
-  createdAt      DateTime @default(now())
-
-  sourceEntity KgEntity       @relation("SourceEntity", fields: [sourceEntityId], references: [id], onDelete: Cascade)
-  targetEntity KgEntity       @relation("TargetEntity", fields: [targetEntityId], references: [id], onDelete: Cascade)
-  sourceChunk  DocumentChunk? @relation("SourceChunk", fields: [sourceChunkId], references: [id], onDelete: SetNull)
-}
-
-model KgEntityChunk {
-  id            String @id @default(uuid())
-  entityId      String
-  chunkId       String
-  mentionOffset Int?
-
-  entity KgEntity      @relation(fields: [entityId], references: [id], onDelete: Cascade)
-  chunk  DocumentChunk @relation(fields: [chunkId], references: [id], onDelete: Cascade)
-
-  @@unique([entityId, chunkId])
-}
-
-// ===== CONVERSATIONAL AI (AGENTIC RAG) =====
-
-model ChatSession {
-  id                   String   @id @default(uuid())
-  workspaceId          String
-  userId               String
-  title                String
-  parentSessionId      String?
-  branchPointMessageId String?
-  isPinned             Boolean  @default(false)
-  lastActiveAt         DateTime @default(now())
-  createdAt            DateTime @default(now())
-
-  workspace Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  messages  Message[]
-  artifacts Artifact[]
-
-  parentSession ChatSession?  @relation("SessionBranches", fields: [parentSessionId], references: [id])
-  childSessions ChatSession[] @relation("SessionBranches")
-}
-
-model Message {
-  id                 String      @id @default(uuid())
-  sessionId          String
-  userId             String? // Nullable for AI messages
-  role               MessageRole
-  content            String      @db.Text
-  citations          Json? // Array of chunk_id and score and location
-  toolCalls          Json? // Array of tool_name, input/output
-  suggestedFollowups Json? // Array of 3 suggested questions
-  tokenUsage         Int?
-  confidenceScore    Float?
-  isBookmarked       Boolean     @default(false)
-  createdAt          DateTime    @default(now())
-
-  session     ChatSession       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  user        User?             @relation("UserFeedback", fields: [userId], references: [id], onDelete: Cascade)
-  feedbacks   MessageFeedback[]
-  annotations Annotation[]
-}
-
-model MessageFeedback {
-  id        String   @id @default(uuid())
-  messageId String
-  userId    String
-  rating    Rating
-  comment   String?  @db.Text
-  createdAt DateTime @default(now())
-
-  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-}
-
-// ===== ARTIFACTS (AUTO-GENERATED) =====
-
-model Artifact {
-  id              String       @id @default(uuid())
-  workspaceId     String
-  generatedById   String
-  sourceSessionId String?
-  artifactType    ArtifactType
-  title           String
-  content         Json // The artifact data as structured JSON
-  exportUrl       String?
-  createdAt       DateTime     @default(now())
-
-  workspace     Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  generatedBy   User         @relation(fields: [generatedById], references: [id])
-  sourceSession ChatSession? @relation(fields: [sourceSessionId], references: [id], onDelete: SetNull)
-}
-
-// ===== COLLABORATION =====
-
-model Annotation {
-  id              String   @id @default(uuid())
-  workspaceId     String
-  userId          String
-  targetChunkId   String?
-  targetMessageId String?
-  content         String   @db.Text
-  highlightRange  Json? // start_offset, end_offset
-  createdAt       DateTime @default(now())
-
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  message   Message?  @relation(fields: [targetMessageId], references: [id], onDelete: SetNull)
-}
-
-model ActivityLog {
-  id          String         @id @default(uuid())
-  workspaceId String
-  userId      String
-  action      ActivityAction
-  description String         @db.Text
-  details     Json? // Extra context
-  createdAt   DateTime       @default(now())
-
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-}
-
-// ===== OBSERVABILITY =====
-
-model AuditLog {
-  id        String      @id @default(uuid())
-  userId    String?
-  ipAddress String?
-  userAgent String?
-  action    AuditAction
-  details   Json?
-  createdAt DateTime    @default(now())
-
-  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 }
