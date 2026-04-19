@@ -19,67 +19,72 @@ export class GuestDocumentService {
     title: string,
     sourceType: string
   ) {
-    // Check if guest can upload
-    if (!guestSessionService.canUploadDocument(sessionId)) {
-      throw new AppError(403, "Document upload limit reached. Sign up to upload more.");
-    }
+    try {
+      // Check if guest can upload
+      if (!guestSessionService.canUploadDocument(sessionId)) {
+        throw new AppError(403, "Document upload limit reached. Sign up to upload more.");
+      }
 
-    // Create a temporary "guest" user if not exists
-    let guestUser = await prisma.user.findUnique({
-      where: { email: "guest@omniscript.temp" },
-    });
-
-    if (!guestUser) {
-      guestUser = await prisma.user.create({
-        data: {
-          email: "guest@omniscript.temp",
-          fullName: "Guest User",
-          passwordHash: null,
-        },
+      // Create a temporary "guest" user if not exists
+      let guestUser = await prisma.user.findUnique({
+        where: { email: "guest@omniscript.temp" },
       });
-    }
 
-    // Create a temporary workspace for guest
-    let guestWorkspace = await prisma.workspace.findFirst({
-      where: {
-        ownerId: guestUser.id,
-        name: `Guest Session ${sessionId}`,
-      },
-    });
+      if (!guestUser) {
+        guestUser = await prisma.user.create({
+          data: {
+            email: "guest@omniscript.temp",
+            fullName: "Guest User",
+            passwordHash: null,
+          },
+        });
+      }
 
-    if (!guestWorkspace) {
-      guestWorkspace = await prisma.workspace.create({
-        data: {
-          name: `Guest Session ${sessionId}`,
-          description: "Temporary workspace for guest user",
+      // Create a temporary workspace for guest
+      let guestWorkspace = await prisma.workspace.findFirst({
+        where: {
           ownerId: guestUser.id,
-          template: "CUSTOM",
+          name: `Guest Session ${sessionId}`,
         },
       });
-    }
 
-    // Create document
-    const document = await prisma.document.create({
-      data: {
-        title,
-        originalFilename: file.originalname,
+      if (!guestWorkspace) {
+        guestWorkspace = await prisma.workspace.create({
+          data: {
+            name: `Guest Session ${sessionId}`,
+            description: "Temporary workspace for guest user",
+            ownerId: guestUser.id,
+            template: "CUSTOM",
+          },
+        });
+      }
+
+      // Create document
+      const document = await prisma.document.create({
+        data: {
+          title,
+          originalFilename: file.originalname,
+          workspaceId: guestWorkspace.id,
+          uploadedById: guestUser.id,
+          sourceType: sourceType as any,
+          status: "QUEUED",
+          mimeType: file.mimetype,
+          fileSizeBytes: BigInt(file.size),
+          storageUrl: file.filename, // Use filename instead of path
+        },
+      });
+
+      // Record upload in guest session
+      guestSessionService.recordDocumentUpload(sessionId, document.id);
+
+      return {
+        document,
         workspaceId: guestWorkspace.id,
-        uploadedById: guestUser.id,
-        sourceType: sourceType as any,
-        status: "QUEUED",
-        mimeType: file.mimetype,
-        fileSizeBytes: BigInt(file.size),
-        storageUrl: file.path || file.filename,
-      },
-    });
-
-    // Record upload in guest session
-    guestSessionService.recordDocumentUpload(sessionId, document.id);
-
-    return {
-      document,
-      workspaceId: guestWorkspace.id,
-    };
+      };
+    } catch (error) {
+      console.error("Guest document upload error:", error);
+      throw error;
+    }
   }
 
   /**

@@ -140,11 +140,15 @@ export default function GuestLanding() {
             <div className="mt-6 flex gap-4">
               <div className="rounded-lg border border-border bg-subtle px-4 py-2">
                 <span className="text-sm text-muted">Documents: </span>
-                <span className="font-semibold">{limits.documentsRemaining}/{limits.maxDocuments}</span>
+                <span className="font-semibold">
+                  {limits.maxDocuments - limits.documentsRemaining}/{limits.maxDocuments}
+                </span>
               </div>
               <div className="rounded-lg border border-border bg-subtle px-4 py-2">
                 <span className="text-sm text-muted">Queries: </span>
-                <span className="font-semibold">{limits.queriesRemaining}/{limits.maxQueries}</span>
+                <span className="font-semibold">
+                  {limits.maxQueries - limits.queriesRemaining}/{limits.maxQueries}
+                </span>
               </div>
             </div>
           )}

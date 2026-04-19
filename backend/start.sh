@@ -8,6 +8,11 @@ if [ -z "$DATABASE_URL" ]; then
 fi
 
 echo "DATABASE_URL is set"
+
+# Create uploads directory if it doesn't exist
+echo "Creating uploads directory..."
+mkdir -p uploads
+
 echo "Running Prisma migrations..."
 npx prisma migrate deploy
 
